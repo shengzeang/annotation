@@ -1,6 +1,7 @@
 import random
 from typing import List, Dict, Any
-from transformers import pipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
 
 
 # ==============================
@@ -25,11 +26,24 @@ class HumanReviewQueue:
 class QwenAnnotator:
     """使用 Qwen 进行标注"""
     def __init__(self, candidate_llms, confidence_threshold: float = 0.7):
-        self.pipe_dict = {}
+        self.model_dict = {}
+        self.tokenizer_dict = {}
         for llm in candidate_llms:
-            self.pipe_dict[llm] = pipeline("text-generation", model=llm, device_map="auto")
+            self.tokenizer_dict[llm] = AutoTokenizer.from_pretrained(llm)
+            self.model_dict[llm] = AutoModelForCausalLM.from_pretrained(llm, device_map="auto")
         self.confidence_threshold = confidence_threshold
         self.human_review_queue = HumanReviewQueue()
+
+    def _generate(self, model, tokenizer, prompt, max_new_tokens=50):
+        device = next(model.parameters()).device
+        inputs = tokenizer(prompt, return_tensors="pt").to(device)
+        with torch.no_grad():
+            output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        output_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        # Only return the new generated part after the prompt
+        if output_text.startswith(prompt):
+            return output_text[len(prompt):].strip()
+        return output_text.strip()
 
     def annotate(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         prompt = (
@@ -37,8 +51,10 @@ class QwenAnnotator:
             f"between 0.0 and 1.0. Use the format: Label: <label>, Confidence: <score>\n"
             f"Text: {sample['text']}"
         )
-        response = self.pipe_dict[sample['route']](prompt, max_new_tokens=50, do_sample=False)
-        output = response[0]["generated_text"].split("\n")[-1]
+        llm = sample['route']
+        model = self.model_dict[llm]
+        tokenizer = self.tokenizer_dict[llm]
+        output = self._generate(model, tokenizer, prompt, max_new_tokens=50)
 
         label, conf = "unknown", random.random()
         if "Confidence" in output:
