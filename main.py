@@ -1,7 +1,10 @@
-from typing import List, Dict, Any
 
-from .recommendation import ActiveLearningRanker, QwenRefiner
-from .annotation import QwenAnnotator
+
+from typing import List, Dict, Any
+from recommendation import ActiveLearningFilter, QwenRefiner
+from annotation import QwenAnnotator
+from load_squad import download_squad, load_squad_to_qa_list
+from utils import export_annotation_results
 
 
 # ==============================
@@ -10,18 +13,20 @@ from .annotation import QwenAnnotator
 
 class HumanLLMAnnotationSystem:
     def __init__(self, candidate_llms):
-        self.ranker = ActiveLearningRanker()
+        self.filter = ActiveLearningFilter(method="alps", budget=100, batch_size=20)
         self.refiner = QwenRefiner(candidate_llms)
         self.annotator = QwenAnnotator(candidate_llms)
 
     def run(self, raw_dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        print("Step 1: Active Learning 粗排...")
-        ranked = self.ranker.rank(raw_dataset)
 
-        print("Step 2: Qwen 精排 + 路由...")
-        refined = self.refiner.refine_and_route(ranked)
+        # Step 1: Active Learning 采样
+        print("Step 1: Active Learning 采样...")
+        sampled_data = self.filter.select(raw_dataset)
 
-        print("Step 3: Qwen 标注 + 人工兜底...")
+        print("Step 2: LLM 精排 + 路由...")
+        refined = self.refiner.refine_and_route(sampled_data)
+
+        print("Step 3: LLM 标注 + 人工兜底...")
         annotated = self.annotator.annotate_batch(refined)
 
         # 导出人工复审池
@@ -31,13 +36,15 @@ class HumanLLMAnnotationSystem:
 
 
 if __name__ == "__main__":
-    raw_data = [{"id": i, "text": f"这是第 {i} 条样本"} for i in range(200)]
+    # 下载并加载SQuAD v1.1数据集
+    download_squad()
+    raw_data = load_squad_to_qa_list(max_samples=1000)
 
-    candidate_llms = ["Qwen2.5-3B-Instruct", "Qwen2.5-7B-Instruct", "Qwen2.5-14B-Instruct"]
+    candidate_llms = ["Qwen/Qwen2.5-3B-Instruct", "Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-14B-Instruct"]
     system = HumanLLMAnnotationSystem(candidate_llms)
     results = system.run(raw_data)
 
     print(f"\n最终得到 {len(results)} 条标注结果")
-    print("前5条结果: ")
-    for r in results[:5]:
-        print(r)
+
+    # 导出标注结果
+    export_annotation_results(results, raw_data, output_path="final_annotation_results.json")

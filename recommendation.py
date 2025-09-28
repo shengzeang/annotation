@@ -4,26 +4,49 @@ from typing import List, Dict, Any
 from transformers import pipeline, AutoModelForCausalLM, AutoTokenizer
 import torch
 
+from tqdm import tqdm
+from active_learning import DataPool, BertEmbeddings, BertKM, SurprisalEmbeddings, ALPS
+
 
 # ==============================
 # Recommendation 模块
 # ==============================
 
-class ActiveLearningRanker:
-    """使用分类模型不确定性进行粗排"""
-    def __init__(self, budget: int = 1000, model_name: str = "distilbert-base-uncased-finetuned-sst-2-english"):
-        self.budget = budget
-        self.clf = pipeline("text-classification", model=model_name, return_all_scores=True)
 
-    def rank(self, dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        scored_data = []
-        for d in dataset:
-            probs = self.clf(d["text"])[0]
-            prob_values = np.array([p["score"] for p in probs])
-            entropy = -np.sum(prob_values * np.log(prob_values + 1e-12))  # 信息熵
-            scored_data.append({**d, "score": entropy})
-        scored_data.sort(key=lambda x: x["score"], reverse=True)
-        return scored_data[:self.budget]
+class ActiveLearningFilter:
+    """
+    Active Learning整体流程API, 简化主流程调用。
+    用法：
+        api = ActiveLearningAPI(method="bertkm", budget=100, batch_size=20)
+        picked_data = api.select(raw_dataset)
+    """
+    def __init__(self, method="bertkm", budget=100, batch_size=20, model_name="bert-base-uncased"):
+        self.method = method.lower()
+        self.budget = budget
+        self.batch_size = batch_size
+        self.model_name = model_name
+
+        if self.method == "bertkm":
+            self.emb = BertEmbeddings(model_name=self.model_name)
+            self.selector = BertKM(self.emb, budget=self.budget, batch_size=self.batch_size)
+        elif self.method == "alps":
+            self.emb = SurprisalEmbeddings(model_name=self.model_name, batch_size=self.batch_size)
+            self.selector = ALPS(self.emb, budget=self.budget, batch_size=self.batch_size)
+        else:
+            raise ValueError(f"Unknown active learning method: {self.method}")
+
+    def select(self, raw_dataset: list) -> list:
+        """
+        输入: 原始样本list[dict], 每个dict至少有id/question/context。
+        输出: 采样后的样本list[dict]。
+        """
+        texts = [d["text"] if "text" in d else f"Q: {d['question']}\nContext: {d['context']}" for d in raw_dataset]
+        ids = [str(d.get("id", i)) for i, d in enumerate(raw_dataset)]
+        pool = DataPool(texts, ids)
+        picked_ids = set(self.selector.run(pool))
+        # 支持id为str/int/索引
+        picked_data = [d for i, d in enumerate(raw_dataset) if str(d.get("id", i)) in picked_ids]
+        return picked_data
 
 
 class QwenRefiner:
@@ -38,19 +61,25 @@ class QwenRefiner:
         device = next(self.model.parameters()).device
         inputs = self.tokenizer(prompt, return_tensors="pt").to(device)
         with torch.no_grad():
-            output_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+            output_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=True)
         output_text = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
         if output_text.startswith(prompt):
             return output_text[len(prompt):].strip()
         return output_text.strip()
 
+    def refine_and_route(self, dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        reranked = self.llm_rerank(dataset)
+        routed = self.llm_route(reranked)
+        return routed
+
     def llm_rerank(self, dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         reranked = []
-        for d in dataset:
+        for d in tqdm(dataset):
+            text = d.get("text") or f"Q: {d['question']}\nContext: {d['context']}"
             prompt = (
                 f"Please rate the usefulness of the following text for improving "
                 f"the downstream task on a scale of 0.0 to 1.0. Output only the number.\n"
-                f"Text: {d['text']}"
+                f"Text: {text}"
             )
             text_out = self._generate(prompt, max_new_tokens=10)
             try:
@@ -64,16 +93,18 @@ class QwenRefiner:
 
     def llm_route(self, dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         routed = []
-        for d in dataset:
+        for d in tqdm(dataset):
+            text = d.get("text") or f"Q: {d['question']}\nContext: {d['context']}"
             prompt = (
-                f"You have the following candidate LLMs: {self.candidate_llms} "
                 f"Based on the content of the input text, choose the most suitable LLM for annotation. "
-                f"Text: {d['text']}"
-                f"Output format: only output the LLM name."
+                f"Text: {text}"
+                f"You have the following candidate LLMs: {self.candidate_llms} "
+                f"Output format: <llm_name>."
             )
-            text_out = self._generate(prompt, max_new_tokens=10)
+            text_out = self._generate(prompt, max_new_tokens=50)
             routed.append({
-                "text": d['text'],
+                **d,
+                "text": text,
                 "route": text_out
             })
         return routed

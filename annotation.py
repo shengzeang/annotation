@@ -3,6 +3,8 @@ from typing import List, Dict, Any
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 
+from tqdm import tqdm
+
 
 # ==============================
 # Annotation 模块
@@ -28,6 +30,7 @@ class QwenAnnotator:
     def __init__(self, candidate_llms, confidence_threshold: float = 0.7):
         self.model_dict = {}
         self.tokenizer_dict = {}
+        self.candidate_llms = candidate_llms
         for llm in candidate_llms:
             self.tokenizer_dict[llm] = AutoTokenizer.from_pretrained(llm)
             self.model_dict[llm] = AutoModelForCausalLM.from_pretrained(llm, device_map="auto")
@@ -38,7 +41,7 @@ class QwenAnnotator:
         device = next(model.parameters()).device
         inputs = tokenizer(prompt, return_tensors="pt").to(device)
         with torch.no_grad():
-            output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+            output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=True)
         output_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
         # Only return the new generated part after the prompt
         if output_text.startswith(prompt):
@@ -46,24 +49,22 @@ class QwenAnnotator:
         return output_text.strip()
 
     def annotate(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+        # 兼容QA样本
+        text = sample.get("text") or f"Q: {sample['question']}\nContext: {sample['context']}"
+        # QA风格prompt，输入Q，期望LLM输出A
         prompt = (
-            f"Please assign a label to the following text and provide a confidence score "
-            f"between 0.0 and 1.0. Use the format: Label: <label>, Confidence: <score>\n"
-            f"Text: {sample['text']}"
+            f"Given the following question, please answer it as accurately as possible.\n"
+            f"Also output a confidence score (between 0.0 and 1.0) for you answer, representing how confident you are in your answer.\n"
+            f"Output format: Answer: <your answer> Confidence: <score>\n"
+            f"Question: {sample.get('question', text)}\n"
+            f"Context: {sample.get('context', '')}\n"
+            f"Answer:"
         )
-        # Select the model based on routing, must be inside candidate_llms
-        # If sample['route'] is not in candidate_llms or is None, find one with largest word overlap with candidate_llms
         llm = sample.get('route')
-        if llm not in self.model_dict:
-            # Find the LLM whose name has the largest word overlap with sample['route']
-            route_words = set(str(sample.get('route', '')).lower().split())
-            max_overlap = -1
-            best_llm = None
-            for candidate in self.model_dict:
-                candidate_words = set(str(candidate).lower().split())
-                overlap = len(route_words & candidate_words)
-                if overlap > max_overlap:
-                    max_overlap = overlap
+        if llm not in self.candidate_llms:
+            best_llm = self.candidate_llms[0]
+            for candidate in self.candidate_llms:
+                if candidate in llm:
                     best_llm = candidate
             llm = best_llm
         model = self.model_dict[llm]
@@ -79,7 +80,7 @@ class QwenAnnotator:
             except:
                 pass
 
-        result = {**sample, "label": label, "confidence": conf}
+        result = {**sample, "route": llm, "label": label, "confidence": conf}
         if conf < self.confidence_threshold:
             result["needs_human"] = True
             self.human_review_queue.add(result)
@@ -88,4 +89,4 @@ class QwenAnnotator:
         return result
 
     def annotate_batch(self, dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        return [self.annotate(d) for d in dataset]
+        return [self.annotate(d) for d in tqdm(dataset)]
