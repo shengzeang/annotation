@@ -1,8 +1,6 @@
-
-
 from typing import List, Dict, Any
-from recommendation import ActiveLearningFilter, QwenRefiner
-from annotation import QwenAnnotator
+from recommendation import ActiveLearningFilter, Refiner
+from annotation import Annotator
 from load_squad import download_squad, load_squad_to_qa_list
 from utils import export_annotation_results
 
@@ -12,14 +10,13 @@ from utils import export_annotation_results
 # ==============================
 
 class HumanLLMAnnotationSystem:
-    def __init__(self, candidate_llms):
-        self.filter = ActiveLearningFilter(method="alps", budget=100, batch_size=20)
-        self.refiner = QwenRefiner(candidate_llms)
-        self.annotator = QwenAnnotator(candidate_llms)
+    def __init__(self, candidate_llms, llm_mode="local", api_config=None):
+        self.filter = ActiveLearningFilter(method="alps", budget=10, batch_size=10)
+        self.refiner = Refiner(candidate_llms, llm_mode=llm_mode, api_config=api_config)
+        self.annotator = Annotator(candidate_llms, llm_mode=llm_mode, api_config=api_config)
 
     def run(self, raw_dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
-        # Step 1: Active Learning 采样
         print("Step 1: Active Learning 采样...")
         sampled_data = self.filter.select(raw_dataset)
 

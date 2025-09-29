@@ -1,15 +1,13 @@
 import random
 from typing import List, Dict, Any
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
-
 from tqdm import tqdm
+
+from llm_provider import LocalLLM, APILLM
 
 
 # ==============================
 # Annotation 模块
 # ==============================
-
 class HumanReviewQueue:
     """人工复审池"""
     def __init__(self):
@@ -25,28 +23,24 @@ class HumanReviewQueue:
         print(f"Human review queue exported to {filepath}")
 
 
-class QwenAnnotator:
-    """使用 Qwen 进行标注"""
-    def __init__(self, candidate_llms, confidence_threshold: float = 0.7):
-        self.model_dict = {}
-        self.tokenizer_dict = {}
+class Annotator:
+    """使用 Qwen 进行标注, LLM调用抽象化"""
+    def __init__(self, candidate_llms, confidence_threshold: float = 0.7, llm_mode: str = "local", api_config: dict = None):
         self.candidate_llms = candidate_llms
-        for llm in candidate_llms:
-            self.tokenizer_dict[llm] = AutoTokenizer.from_pretrained(llm)
-            self.model_dict[llm] = AutoModelForCausalLM.from_pretrained(llm, device_map="auto")
+        self.llm_mode = llm_mode
+        self.llm_dict = {}
+        if llm_mode == "local":
+            for llm in candidate_llms:
+                self.llm_dict[llm] = LocalLLM(llm)
+        elif llm_mode == "api":
+            # api_config: {llm_name: {"api_url":..., "api_key":..., ...}}
+            for llm in candidate_llms:
+                conf = api_config.get(llm, {}) if api_config else {}
+                self.llm_dict[llm] = APILLM(conf.get("api_url", ""), conf.get("api_key"), conf.get("extra_headers"))
+        else:
+            raise ValueError(f"Unknown llm_mode: {llm_mode}")
         self.confidence_threshold = confidence_threshold
         self.human_review_queue = HumanReviewQueue()
-
-    def _generate(self, model, tokenizer, prompt, max_new_tokens=50):
-        device = next(model.parameters()).device
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
-        with torch.no_grad():
-            output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=True)
-        output_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        # Only return the new generated part after the prompt
-        if output_text.startswith(prompt):
-            return output_text[len(prompt):].strip()
-        return output_text.strip()
 
     def annotate(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         # 兼容QA样本
@@ -64,12 +58,10 @@ class QwenAnnotator:
         if llm not in self.candidate_llms:
             best_llm = self.candidate_llms[0]
             for candidate in self.candidate_llms:
-                if candidate in llm:
+                if candidate in str(llm):
                     best_llm = candidate
             llm = best_llm
-        model = self.model_dict[llm]
-        tokenizer = self.tokenizer_dict[llm]
-        output = self._generate(model, tokenizer, prompt, max_new_tokens=50)
+        output = self.llm_dict[llm].generate(prompt, max_new_tokens=50)
 
         label, conf = "unknown", random.random()
         if "Confidence" in output:
