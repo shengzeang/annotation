@@ -7,6 +7,7 @@ from active_learning import DataPool, BertEmbeddings, BertKM, SurprisalEmbedding
 from llm_provider import LocalLLM, APILLM
 
 
+from task import Task, QATask
 # ==============================
 # Recommendation 模块
 # ==============================
@@ -48,14 +49,14 @@ class ActiveLearningFilter:
 
 class Refiner:
     """使用 LLM 进行精排和路由"""
-    def __init__(self, candidate_llms, self_llm: str = "Qwen/Qwen2.5-7B-Instruct", budget: int = 200, llm_mode: str = "local", api_config: dict = None):
+    def __init__(self, candidate_llms, self_llm: str = "Qwen/Qwen2.5-7B-Instruct", budget: int = 200, llm_mode: str = "local", api_config: dict = None, task: Task = None):
         self.budget = budget
         self.candidate_llms = candidate_llms
         self.llm_mode = llm_mode
+        self.task = task or QATask()
         if llm_mode == "local":
             self.llm = LocalLLM(self_llm)
         elif llm_mode == "api":
-            # api_config: {llm_name: {"api_url":..., "api_key":..., ...}}
             conf = api_config.get(self.llm, {}) if api_config else {}
             self.llm = APILLM(conf.get("api_url", ""), conf.get("api_key"), conf.get("extra_headers"))
         else:
@@ -101,7 +102,6 @@ class Refiner:
             text_out = self._generate(prompt, max_new_tokens=50)
             routed.append({
                 **d,
-                "text": d['text'],
                 "route": text_out
             })
         return routed

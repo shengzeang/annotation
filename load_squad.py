@@ -29,7 +29,7 @@ def load_squad_to_qa_list(squad_path="squad_train.json", max_samples=200):
                     "question": question,
                     "context": context,
                     "answer": answer,
-                    "text": f"Q: {question}\nContext: {context}"
+                    "text": f"Question: {question}\nContext: {context}"
                 })
                 if len(qa_list) >= max_samples:
                     return qa_list

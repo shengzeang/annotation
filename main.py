@@ -1,6 +1,7 @@
 from typing import List, Dict, Any
 from recommendation import ActiveLearningFilter, Refiner
 from annotation import Annotator
+from task import QATask
 from load_squad import download_squad, load_squad_to_qa_list
 from utils import export_annotation_results
 
@@ -10,10 +11,10 @@ from utils import export_annotation_results
 # ==============================
 
 class HumanLLMAnnotationSystem:
-    def __init__(self, candidate_llms, llm_mode="local", api_config=None):
-        self.filter = ActiveLearningFilter(method="alps", budget=10, batch_size=10)
-        self.refiner = Refiner(candidate_llms, llm_mode=llm_mode, api_config=api_config)
-        self.annotator = Annotator(candidate_llms, llm_mode=llm_mode, api_config=api_config)
+    def __init__(self, candidate_llms, task=QATask(), llm_mode="local", api_config=None):
+        self.filter = ActiveLearningFilter(method="alps", budget=1000, batch_size=50)
+        self.refiner = Refiner(candidate_llms, budget=100, llm_mode=llm_mode, api_config=api_config)
+        self.annotator = Annotator(candidate_llms, llm_mode=llm_mode, api_config=api_config, task=task)
 
     def run(self, raw_dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
@@ -35,13 +36,15 @@ class HumanLLMAnnotationSystem:
 if __name__ == "__main__":
     # 下载并加载SQuAD v1.1数据集
     download_squad()
-    raw_data = load_squad_to_qa_list(max_samples=1000)
+    raw_data = load_squad_to_qa_list(max_samples=10000)
+    task = QATask()
 
     candidate_llms = ["Qwen/Qwen2.5-3B-Instruct", "Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-14B-Instruct"]
-    system = HumanLLMAnnotationSystem(candidate_llms)
+    system = HumanLLMAnnotationSystem(candidate_llms, task)
     results = system.run(raw_data)
 
     print(f"\n最终得到 {len(results)} 条标注结果")
 
-    # 导出标注结果
-    export_annotation_results(results, raw_data, output_path="final_annotation_results.json")
+    # 只导出自动标注通过的结果（needs_human=False）
+    auto_results = [r for r in results if not r.get("needs_human", False)]
+    export_annotation_results(auto_results, raw_data, output_path="final_annotation_results.json")
