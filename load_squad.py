@@ -16,6 +16,7 @@ def load_squad_to_qa_list(squad_path="squad_train.json", max_samples=200):
     with open(squad_path, encoding="utf-8") as f:
         squad = json.load(f)
     qa_list = []
+    i = 0
     for article in squad["data"]:
         for para in article["paragraphs"]:
             context = para["context"]
@@ -24,6 +25,9 @@ def load_squad_to_qa_list(squad_path="squad_train.json", max_samples=200):
                     continue
                 question = qa["question"]
                 answer = qa["answers"][0]["text"] if qa["answers"] else ""
+                i += 1
+                if i < 500:
+                    continue
                 qa_list.append({
                     "id": qa["id"],
                     "question": question,

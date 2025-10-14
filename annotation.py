@@ -6,7 +6,6 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
-from llm_provider import LocalLLM, APILLM
 from task import Task, QATask
 
 
@@ -30,21 +29,10 @@ class HumanReviewQueue:
 
 class Annotator:
     """使用 Qwen 进行标注, LLM调用抽象化"""
-    def __init__(self, candidate_llms, confidence_threshold: float = 0.7, llm_mode: str = "local", api_config: dict = None,
+    def __init__(self, candidate_llms, llm_dict, confidence_threshold: float = 0.7, 
                  rag_method: str = "bm25", kb_path: str = "knowledge_base.json", task: Task = None):
         self.candidate_llms = candidate_llms
-        self.llm_mode = llm_mode
-        self.llm_dict = {}
-        if llm_mode == "local":
-            for llm in candidate_llms:
-                self.llm_dict[llm] = LocalLLM(llm)
-        elif llm_mode == "api":
-            for llm in candidate_llms:
-                conf = api_config.get(llm, {}) if api_config else {}
-                self.llm_dict[llm] = APILLM(conf.get("api_url", ""), conf.get("api_key"), conf.get("extra_headers"))
-        else:
-            raise ValueError(f"Unknown llm_mode: {llm_mode}")
-
+        self.llm_dict = llm_dict
         self.confidence_threshold = confidence_threshold
         self.human_review_queue = HumanReviewQueue()
         self.kb_path = kb_path
