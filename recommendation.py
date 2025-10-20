@@ -66,9 +66,17 @@ class Refiner:
         reranked = []
         for d in tqdm(dataset):
             prompt = (
-                f"Please rate the usefulness of the following text for improving "
-                f"the downstream task on a scale of 0.0 to 1.0. Output only the number.\n"
-                f"Text: {d['text']}"
+                f"You are an expert evaluator assisting in selecting the most useful samples for a downstream task.\n"
+                f"Given a candidate sample, your job is to analyze how useful the sample is for improving performance on the target task.\n"
+                f"You must assign a usefulness score between 0.0 (completely useless) and 1.0 (highly useful) based on the sample's relevance, \
+                    informativeness, and contribution to solving or learning the target task.\n"
+                f"When judging usefulness, consider the following aspects: \
+                    1. Relevance: How closely does the sample relate to the target task's domain or objectives? \
+                    2. Informative Value: Does the sample contain unique or high-quality information that can improve understanding or model performance? \
+                    3. Clarity and Correctness: Is the sample accurate, well-structured, and unambiguous? \
+                    4. Diversity Contribution (optional): Does the sample add valuable variety to the dataset without redundancy?\n"
+                f"Output only the usefulness score as a float number between 0.0 and 1.0.\n"
+                f"Candiate sample: {d['text']}"
             )
             text_out = self._generate(prompt, max_new_tokens=10)
             try:
@@ -84,10 +92,14 @@ class Refiner:
         routed = []
         for d in tqdm(dataset):
             prompt = (
+                f"You are an expert system responsible for recommending the most appropriate candidate LLM to annotate a given data sample.\n"
                 f"You have the following candidate LLMs: {self.candidate_llms}\n"
-                f"Based on the content of the input text, choose the most suitable LLM for annotation.\n"
-                f"Jointly consider performance, cost, and the question difficulty.\n"
-                f"Text: {d['text']}\n"
+                f"Your goal is to analyze the sample's characteristics, difficulty, and domain, then choose the LLM that is best suited for producing accurate and high-quality annotations on this sample.\n"
+                f"When choosing the best LLM, consider: 1. Domain Expertise: Which model is most familiar with the domain (e.g., legal, medical, conversational)? \
+                    2. Complexity Handling: Which model performs best on tasks of similar difficulty? \
+                        3. Instruction Following & Alignment: Which model is most reliable for annotation-style outputs? \
+                            4. Cost-Performance Tradeoff: Prefer smaller models for simple samples, larger models for complex reasoning.\n"
+                f"Data sample: {d['text']}\n"
                 f"Output format: <LLM name>.\n"
                 f"Output: "
             )

@@ -58,6 +58,7 @@ if __name__ == "__main__":
             "Qwen/Qwen2.5-7B-Instruct",
             "Qwen/Qwen2.5-14B-Instruct",
             "Qwen/Qwen2.5-32B-Instruct"]
+    # candidate_llms = ["Qwen/Qwen2.5-32B-Instruct"]
     system = HumanLLMAnnotationSystem(candidate_llms, task)
     results = system.run(raw_data)
 
@@ -65,7 +66,7 @@ if __name__ == "__main__":
 
     # 只导出自动标注通过的结果（needs_human=False）
     auto_results = [r for r in results if not r.get("needs_human", False)]
-    export_annotation_results(auto_results, raw_data, output_path="final_annotation_results.json")
+    export_annotation_results(auto_results, raw_data, output_path="our_anno_new.json")
 
     # 计算自动标注BLEU和ROUGE分数
     from utils import compute_metrics_for_annotations
