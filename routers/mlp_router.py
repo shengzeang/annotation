@@ -152,3 +152,21 @@ class MLPRouter(BaseRouter):
         router.model.load_state_dict(state)
         router.model.eval()
         return router
+
+
+def train_mlprouter_from_annotations(ann_path: str, candidate_llms: List[str], out_dir: str, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", epochs: int = 200, batch_size: int = 32):
+    with open(ann_path, encoding="utf-8") as f:
+        data = json.load(f)
+    pairs = []
+    positive_score = 1.0
+    negative_score = 0.0
+    for d in data:
+        sample_text = d.get("text") or f"Q: {d.get('question','')}\nContext: {d.get('context','')}"
+        routed = d.get("route")
+        for cand in candidate_llms:
+            score = positive_score if cand == routed else negative_score
+            pairs.append({"sample": sample_text, "candidate": cand, "score": float(score)})
+    router = MLPRouter(hidden_dim=64, encoder_name=encoder_name)
+    router.train(pairs, epochs=epochs, batch_size=batch_size)
+    router.save(out_dir)
+    return router

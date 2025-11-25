@@ -12,7 +12,6 @@ __all__ = [
     "MLPRouter",
     "KNNRouter",
     "GraphRouter",
-    "synthesize_pairs_from_annotations",
     "train_mlprouter_from_annotations",
     "build_knn_from_annotations",
     "build_graph_from_annotations",
