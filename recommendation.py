@@ -48,11 +48,12 @@ class ActiveLearningFilter:
 
 class Refiner:
     """使用 LLM 进行精排和路由"""
-    def __init__(self, candidate_llms, self_llm, budget: int = 200, task: Task = None):
+    def __init__(self, candidate_llms, self_llm, budget: int = 200, task: Task = None, router=None):
         self.budget = budget
         self.candidate_llms = candidate_llms
         self.llm = self_llm
         self.task = task or QATask()
+        self.router = router  # optional router implementing score(sample, candidate_llms)
 
     def _generate(self, prompt, max_new_tokens=10):
         return self.llm.generate(prompt, max_new_tokens=max_new_tokens)
@@ -91,21 +92,30 @@ class Refiner:
     def llm_route(self, dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         routed = []
         for d in tqdm(dataset):
-            prompt = (
-                f"You are an expert system responsible for recommending the most appropriate candidate LLM to annotate a given data sample.\n"
-                f"You have the following candidate LLMs: {self.candidate_llms}\n"
-                f"Your goal is to analyze the sample's characteristics, difficulty, and domain, then choose the LLM that is best suited for producing accurate and high-quality annotations on this sample.\n"
-                f"When choosing the best LLM, consider: 1. Domain Expertise: Which model is most familiar with the domain (e.g., legal, medical, conversational)? \
-                    2. Complexity Handling: Which model performs best on tasks of similar difficulty? \
-                        3. Instruction Following & Alignment: Which model is most reliable for annotation-style outputs? \
-                            4. Cost-Performance Tradeoff: Prefer smaller models for simple samples, larger models for complex reasoning.\n"
-                f"Data sample: {d['text']}\n"
-                f"Output format: <LLM name>.\n"
-                f"Output: "
-            )
-            text_out = self._generate(prompt, max_new_tokens=50)
-            routed.append({
-                **d,
-                "route": text_out
-            })
+            # If a router is provided (e.g., MLPRouter), use it to score candidates
+            if self.router is not None:
+                try:
+                    scores = self.router.score(d.get('text', ''), self.candidate_llms)
+                    # scores -> list of {model, score}
+                    best = max(scores, key=lambda x: x.get('score', 0.0))
+                    chosen = best.get('model')
+                except Exception:
+                    chosen = self.candidate_llms[0]
+                    scores = [{'model': m, 'score': 0.0} for m in self.candidate_llms]
+                routed.append({**d, 'route': chosen, 'route_scores': scores})
+            else:
+                prompt = (
+                    f"You are an expert system responsible for recommending the most appropriate candidate LLM to annotate a given data sample.\n"
+                    f"You have the following candidate LLMs: {self.candidate_llms}\n"
+                    f"Your goal is to analyze the sample's characteristics, difficulty, and domain, then choose the LLM that is best suited for producing accurate and high-quality annotations on this sample.\n"
+                    f"When choosing the best LLM, consider: 1. Domain Expertise: Which model is most familiar with the domain (e.g., legal, medical, conversational)? \n"
+                    f"2. Complexity Handling: Which model performs best on tasks of similar difficulty? \n"
+                    f"3. Instruction Following & Alignment: Which model is most reliable for annotation-style outputs? \n"
+                    f"4. Cost-Performance Tradeoff: Prefer smaller models for simple samples, larger models for complex reasoning.\n"
+                    f"Data sample: {d['text']}\n"
+                    f"Output format: <LLM name>.\n"
+                    f"Output: "
+                )
+                text_out = self._generate(prompt, max_new_tokens=50)
+                routed.append({**d, 'route': text_out})
         return routed
