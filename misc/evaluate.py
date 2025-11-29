@@ -8,7 +8,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments,
 from datasets import Dataset
 from tqdm import tqdm
 
-from metrics import compute_bleu, compute_rouge
+from misc.metrics import compute_bleu, compute_rouge
 
 
 def convert_to_sft(input_path, output_path):

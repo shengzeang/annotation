@@ -9,9 +9,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 from task import Task, QATask
 
 
-# ==============================
-# Annotation 模块
-# ==============================
 class HumanReviewQueue:
     """人工复审池"""
     def __init__(self):

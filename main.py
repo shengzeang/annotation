@@ -1,10 +1,10 @@
 from typing import List, Dict, Any
-from recommendation import ActiveLearningFilter, Refiner
+from router import ActiveLearningFilter, Refiner
 from annotation import Annotator
 from task import QATask
-from load_squad import download_squad, load_squad_to_qa_list
+from misc.load_squad import download_squad, load_squad_to_qa_list
 from utils import export_annotation_results
-from llm_provider import LocalLLM, APILLM
+from misc.llm_provider import LocalLLM, APILLM
 
 
 # ==============================

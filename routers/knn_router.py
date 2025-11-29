@@ -10,7 +10,7 @@ from .base_router import BaseRouter
 
 class KNNRouter(BaseRouter):
     """KNN-based router using historical annotated samples."""
-    def __init__(self, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", k: int = 5, device: Optional[str] = None):
+    def __init__(self, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", k: int = 5, device: Optional[str] = None, ann_path: Optional[str] = None):
         self.encoder_name = encoder_name
         self.tokenizer = AutoTokenizer.from_pretrained(self.encoder_name, trust_remote_code=True)
         self.encoder = AutoModel.from_pretrained(self.encoder_name, trust_remote_code=True)
@@ -20,6 +20,12 @@ class KNNRouter(BaseRouter):
         self.k = int(k)
         self.sample_embs: Optional[np.ndarray] = None
         self.routes: List[str] = []
+        self.ann_path = ann_path
+
+    @property
+    def if_train(self):
+        self.ready = False
+        return True
 
     def _encode_texts(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
         all_embs = []
@@ -133,8 +139,21 @@ class KNNRouter(BaseRouter):
         return router
 
 
-def build_knn_from_annotations(ann_path: str, out_dir: str, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", k: int = 5):
-    router = KNNRouter(encoder_name=encoder_name, k=k)
-    router.build_index_from_annotations(ann_path)
-    router.save(out_dir)
-    return router
+    def build_from_annotations(self, out_dir: str):
+        with open(self.ann_path, encoding='utf-8') as f:
+            data = json.load(f)
+        samples = []
+        routes = []
+        for d in data:
+            sample_text = d.get("text") or f"Q: {d.get('question','')}\nContext: {d.get('context','')}"
+            routed = d.get('route')
+            if routed is None:
+                continue
+            samples.append(sample_text)
+            routes.append(routed)
+        if len(samples) == 0:
+            raise ValueError("No routed samples found in annotations to build KNN index")
+        embs = self._encode_texts(samples)
+        self.sample_embs = embs.astype(np.float32)
+        self.routes = routes
+        self.save(out_dir)

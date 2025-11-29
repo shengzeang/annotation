@@ -15,7 +15,7 @@ except Exception:
 
 class GraphRouter(BaseRouter):
     """Graph-based router: builds a bipartite graph between samples and models and propagates scores."""
-    def __init__(self, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", topk: int = 8, alpha: float = 0.85, device: Optional[str] = None):
+    def __init__(self, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", topk: int = 8, alpha: float = 0.85, device: Optional[str] = None, ann_path: Optional[str] = None):
         self.encoder_name = encoder_name
         self.tokenizer = AutoTokenizer.from_pretrained(self.encoder_name, trust_remote_code=True)
         self.encoder = AutoModel.from_pretrained(self.encoder_name, trust_remote_code=True)
@@ -28,6 +28,12 @@ class GraphRouter(BaseRouter):
         self.sample_embs: Optional[np.ndarray] = None
         self.model_list: List[str] = []
         self.sample_to_model_edges: List[List[str]] = []
+        self.ann_path = ann_path
+
+    @property
+    def if_train(self):
+        self.ready = False
+        return True
 
     def _encode_texts(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
         all_embs = []
@@ -51,47 +57,6 @@ class GraphRouter(BaseRouter):
         if len(all_embs) == 0:
             return np.zeros((0, 0), dtype=np.float32)
         return np.vstack(all_embs)
-
-    def build_graph_from_annotations(self, ann_path: str):
-        with open(ann_path, encoding='utf-8') as f:
-            data = json.load(f)
-        samples = []
-        sample_model_edges = []
-        models_set = set()
-        for d in data:
-            txt = d.get('text') or f"Q: {d.get('question','')}\nContext: {d.get('context','')}"
-            route = d.get('route')
-            if route is None:
-                continue
-            samples.append(txt)
-            sample_model_edges.append(route)
-            models_set.add(route)
-        if len(samples) == 0:
-            raise ValueError("No routed samples found in annotations to build Graph")
-        model_list = sorted(list(models_set))
-        self.sample_texts = samples
-        self.sample_to_model_edges = sample_model_edges
-        self.model_list = model_list
-        embs = self._encode_texts(self.sample_texts)
-        self.sample_embs = embs.astype(np.float32)
-
-        # build sample-sample topk neighbor indices using cosine similarity
-        a = self.sample_embs
-        norms = np.linalg.norm(a, axis=1, keepdims=True)
-        norms[norms == 0] = 1e-12
-        sim = (a @ a.T) / (norms * norms.T)
-        N = sim.shape[0]
-        topk = min(self.topk + 1, N)
-        idx = np.argpartition(-sim, range(topk), axis=1)[:, :topk]
-        # Remove self index and limit topk
-        neigh_idx = []
-        for i in range(N):
-            row = idx[i]
-            row = row[row != i]
-            if len(row) > self.topk:
-                row = row[:self.topk]
-            neigh_idx.append(row.tolist())
-        self._neighbor_idx = neigh_idx
 
     def _personalized_propagation(self, pref: np.ndarray, max_iter: int = 20, tol: float = 1e-6) -> np.ndarray:
         # pref: preference over samples shape (N,)
@@ -242,8 +207,44 @@ class GraphRouter(BaseRouter):
         return router
 
 
-def build_graph_from_annotations(ann_path: str, out_dir: str, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", topk: int = 8, alpha: float = 0.85):
-    router = GraphRouter(encoder_name=encoder_name, topk=topk, alpha=alpha)
-    router.build_graph_from_annotations(ann_path)
-    router.save(out_dir)
-    return router
+    def build_from_annotations(self, out_dir: str):
+        with open(self.ann_path, encoding='utf-8') as f:
+            data = json.load(f)
+        samples = []
+        sample_model_edges = []
+        models_set = set()
+        for d in data:
+            txt = d.get('text') or f"Q: {d.get('question','')}\nContext: {d.get('context','')}"
+            route = d.get('route')
+            if route is None:
+                continue
+            samples.append(txt)
+            sample_model_edges.append(route)
+            models_set.add(route)
+        if len(samples) == 0:
+            raise ValueError("No routed samples found in annotations to build Graph")
+        model_list = sorted(list(models_set))
+        self.sample_texts = samples
+        self.sample_to_model_edges = sample_model_edges
+        self.model_list = model_list
+        embs = self._encode_texts(self.sample_texts)
+        self.sample_embs = embs.astype(np.float32)
+
+        # build sample-sample topk neighbor indices using cosine similarity
+        a = self.sample_embs
+        norms = np.linalg.norm(a, axis=1, keepdims=True)
+        norms[norms == 0] = 1e-12
+        sim = (a @ a.T) / (norms * norms.T)
+        N = sim.shape[0]
+        topk = min(self.topk + 1, N)
+        idx = np.argpartition(-sim, range(topk), axis=1)[:, :topk]
+        # Remove self index and limit topk
+        neigh_idx = []
+        for i in range(N):
+            row = idx[i]
+            row = row[row != i]
+            if len(row) > self.topk:
+                row = row[:self.topk]
+            neigh_idx.append(row.tolist())
+        self._neighbor_idx = neigh_idx
+        self.save(out_dir)

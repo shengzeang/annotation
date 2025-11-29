@@ -1,6 +1,6 @@
 import json
 from typing import List, Dict, Any
-from metrics import compute_bleu, compute_rouge
+from misc.metrics import compute_bleu, compute_rouge
 
 
 def compute_metrics_for_annotations(auto_results: List[Dict[str, Any]], raw_data: List[Dict[str, Any]]):

@@ -15,7 +15,7 @@ class MLPRouter(BaseRouter):
     pairs and predicts a score in [0,1]. Supports training from labeled pairs and
     scoring new samples.
     """
-    def __init__(self, hidden_dim: int = 64, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", device: str = None):
+    def __init__(self, hidden_dim: int = 64, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", device: str = None, ann_path: Optional[str] = None):
         self.encoder_name = encoder_name
         self.tokenizer = AutoTokenizer.from_pretrained(self.encoder_name, trust_remote_code=True)
         self.encoder = AutoModel.from_pretrained(self.encoder_name, trust_remote_code=True)
@@ -24,6 +24,12 @@ class MLPRouter(BaseRouter):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.encoder.to(self.device)
         self.encoder.eval()
+        self.ann_path = ann_path
+
+    @property
+    def if_train(self):
+        self.ready = False
+        return True
 
     class _Net(nn.Module):
         def __init__(self, input_dim, hidden_dim):
@@ -154,19 +160,20 @@ class MLPRouter(BaseRouter):
         return router
 
 
-def train_mlprouter_from_annotations(ann_path: str, candidate_llms: List[str], out_dir: str, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", epochs: int = 200, batch_size: int = 32):
-    with open(ann_path, encoding="utf-8") as f:
-        data = json.load(f)
-    pairs = []
-    positive_score = 1.0
-    negative_score = 0.0
-    for d in data:
-        sample_text = d.get("text") or f"Q: {d.get('question','')}\nContext: {d.get('context','')}"
-        routed = d.get("route")
-        for cand in candidate_llms:
-            score = positive_score if cand == routed else negative_score
-            pairs.append({"sample": sample_text, "candidate": cand, "score": float(score)})
-    router = MLPRouter(hidden_dim=64, encoder_name=encoder_name)
-    router.train(pairs, epochs=epochs, batch_size=batch_size)
-    router.save(out_dir)
-    return router
+    def build_from_annotations(self, out_dir: str, candidate_llms: List[str], epochs: int = 200, batch_size: int = 32):
+        if self.ann_path is None:
+            raise ValueError("Annotation path not provided.")
+        
+        with open(self.ann_path, encoding="utf-8") as f:
+            data = json.load(f)
+        pairs = []
+        positive_score = 1.0
+        negative_score = 0.0
+        for d in data:
+            sample_text = d.get("text") or f"Q: {d.get('question','')}\nContext: {d.get('context','')}"
+            routed = d.get("route")
+            for cand in candidate_llms:
+                score = positive_score if cand == routed else negative_score
+                pairs.append({"sample": sample_text, "candidate": cand, "score": float(score)})
+        self.train(pairs, epochs=epochs, batch_size=batch_size)
+        self.save(out_dir)

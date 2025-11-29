@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from llm_provider import LLMBase
+from misc.llm_provider import LLMBase
 import math
 
 from .base_router import BaseRouter
@@ -13,6 +13,11 @@ class LLMRouter(BaseRouter):
     def __init__(self, scorer: LLMBase, temperature: float = 0.0):
         self.scorer = scorer
         self.temperature = temperature
+
+    @property
+    def if_train(self):
+        self.ready = True
+        return False
 
     def _build_prompt(self, sample_text: str, candidate_llms: List[str]) -> str:
         prompt = (

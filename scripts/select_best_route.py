@@ -12,8 +12,8 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any
 
-from metrics import compute_bleu
-from load_squad import download_squad, load_squad_to_qa_list
+from misc.metrics import compute_bleu
+from misc.load_squad import download_squad, load_squad_to_qa_list
 
 
 def load_annotations(path: Path) -> Dict[str, Dict[str, Any]]:
