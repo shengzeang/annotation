@@ -1,2 +1,3 @@
 final_annotation_results.json
 /.vscode
+*.pyc
