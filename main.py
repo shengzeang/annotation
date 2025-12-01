@@ -1,6 +1,7 @@
 from typing import List, Dict, Any
-from router import ActiveLearningFilter, Refiner
 from annotation import Annotator
+from filtering import ActiveLearningFilter, LLMNaiveFilter
+from routing import KNNRouter
 from task import QATask
 from misc.load_squad import download_squad, load_squad_to_qa_list
 from utils import export_annotation_results
@@ -27,20 +28,22 @@ class HumanLLMAnnotationSystem:
             raise ValueError(f"Unknown llm_mode: {llm_mode}")
 
 
-        self.filter = ActiveLearningFilter(method="alps", budget=1000, batch_size=50)
-        self.refiner = Refiner(self.candidate_llms, self.llm_dict["Qwen/Qwen2.5-7B-Instruct"], budget=500)
+        self.filter_1 = ActiveLearningFilter(method="alps", budget=1000, batch_size=50)
+        self.filter_2 = LLMNaiveFilter(self.llm_dict["Qwen/Qwen2.5-7B-Instruct"], budget=500)
+        self.router = KNNRouter(candidate_llms=candidate_llms, encoder_name="sentence-transformers/all-MiniLM-L6-v2", k=5, ann_path="our_anno_knn.json")
         self.annotator = Annotator(self.candidate_llms, self.llm_dict, task=task)
 
     def run(self, raw_dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
-        print("Step 1: Active Learning 采样...")
-        sampled_data = self.filter.select(raw_dataset)
+        print("Step 1: stream filter")
+        filtered_data = self.filter_1.filter(raw_dataset)
+        filtered_data = self.filter_2.filter(filtered_data)
 
-        print("Step 2: LLM 精排 + 路由...")
-        refined = self.refiner.refine_and_route(sampled_data)
+        print("Step 2: LLM route")
+        routed = self.router.route(filtered_data)
 
-        print("Step 3: LLM 标注 + 人工兜底...")
-        annotated = self.annotator.annotate_batch(refined)
+        print("Step 3: LLM annotation")
+        annotated = self.annotator.annotate_batch(routed)
 
         # 导出人工复审池
         self.annotator.human_review_queue.export()
@@ -56,8 +59,8 @@ if __name__ == "__main__":
 
     candidate_llms = ["Qwen/Qwen2.5-3B-Instruct",
             "Qwen/Qwen2.5-7B-Instruct",
-            "Qwen/Qwen2.5-14B-Instruct",
-            "Qwen/Qwen2.5-32B-Instruct"]
+            "Qwen/Qwen2.5-14B-Instruct",]
+            #"Qwen/Qwen2.5-32B-Instruct"]
     # candidate_llms = ["Qwen/Qwen2.5-32B-Instruct"]
     system = HumanLLMAnnotationSystem(candidate_llms, task)
     results = system.run(raw_data)

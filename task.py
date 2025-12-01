@@ -3,7 +3,6 @@ task.py: 任务类型抽象基类
 """
 from abc import ABC, abstractmethod
 import unicodedata, re
-from nltk.tokenize import word_tokenize, sentence_tokenize
 from typing import Dict, Any
 
 
@@ -200,7 +199,7 @@ class TextSummarization(Task):
             f"The summary should not exceed {self.max_len} words.\n"
             f"Also output a confidence score (between 0.0 and 1.0) for your answer, representing how confident you are in your answer.\n"
             f"Output format: Summary: <summary text> Confidence: <score>\n"
-            f"Text: {sample.get("text", "")}\n"
+            f"Text: {sample.get('text', '')}\n"
             f"{rag_str}"
             f"Summary:"
         )

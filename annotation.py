@@ -26,13 +26,14 @@ class HumanReviewQueue:
 
 class Annotator:
     """使用 Qwen 进行标注, LLM调用抽象化"""
-    def __init__(self, candidate_llms, llm_dict, confidence_threshold: float = 0.7, 
+    def __init__(self, candidate_llms, llm_dict, confidence_threshold: float = 0.7, rag: bool = True,
                  rag_method: str = "bm25", kb_path: str = "knowledge_base.json", task: Task = None):
         self.candidate_llms = candidate_llms
         self.llm_dict = llm_dict
         self.confidence_threshold = confidence_threshold
         self.human_review_queue = HumanReviewQueue()
         self.kb_path = kb_path
+        self.rag = rag
         self.rag_method = rag_method.lower() if rag_method else "bm25"
         # 加载本地知识库
         self.knowledge_base = self._load_knowledge_base()
@@ -85,10 +86,13 @@ class Annotator:
             return [x[1] for x in scored[:topk] if x[0] > 0]
 
     def annotate(self, sample: Dict[str, Any]) -> Dict[str, Any]:
-        # RAG 检索相似历史标注
-        rag_examples = self._rag_retrieve(sample.get("question", ""), topk=3)
-        # 通过Task对象生成prompt
-        prompt = self.task.get_prompt(sample, rag_examples)
+        if self.rag:
+            # RAG 检索相似历史标注
+            rag_examples = self._rag_retrieve(sample.get("question", ""), topk=3)
+            # 通过Task对象生成prompt
+            prompt = self.task.get_prompt(sample, rag_examples)
+        else:
+            prompt = self.task.get_prompt(sample)
         llm = sample.get('route')
         if llm not in self.candidate_llms:
             best_llm = self.candidate_llms[0]
