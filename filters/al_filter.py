@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
-from filters.base_filter import BaseFilter
-from filters.active_learning import DataPool, BertEmbeddings, BertKM, SurprisalEmbeddings, ALPS
+from base_structure.base_filter import BaseFilter
+from base_structure.active_learning import DataPool, BertEmbeddings, BertKM, SurprisalEmbeddings, ALPS
 
 class ActiveLearningFilter(BaseFilter):
     """

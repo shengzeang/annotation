@@ -6,7 +6,7 @@ import numpy as np
 import os
 import json
 
-from .base_router import BaseRouter
+from ..base_structure.base_router import BaseRouter
 
 
 class MLPRouter(BaseRouter):

@@ -1,7 +1,7 @@
 from typing import List, Dict, Any
 from tqdm import tqdm
 import random
-from filters.base_filter import BaseFilter
+from base_structure.base_filter import BaseFilter
 
 class LLMNaiveFilter(BaseFilter):
     """

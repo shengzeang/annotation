@@ -5,7 +5,7 @@ import os
 import json
 import torch
 
-from .base_router import BaseRouter
+from ..base_structure.base_router import BaseRouter
 
 
 class KNNRouter(BaseRouter):

@@ -4,7 +4,7 @@ import os
 import json
 import torch
 from transformers import AutoTokenizer, AutoModel
-from .base_router import BaseRouter
+from ..base_structure.base_router import BaseRouter
 
 try:
     import scipy.sparse as sp
