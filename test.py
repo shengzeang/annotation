@@ -1,7 +1,7 @@
 from typing import List, Dict, Any
 from annotation import Annotator
 from filtering import ActiveLearningFilter, LLMNaiveFilter
-from routing import KNNRouter
+from routing import KNNRouter, CascadeRouter
 from task import QATask
 from misc.load_squad import download_squad, load_squad_to_qa_list
 from utils import export_annotation_results
@@ -31,6 +31,7 @@ class HumanLLMAnnotationSystem:
         self.filter_1 = ActiveLearningFilter(method="alps", budget=1000, batch_size=50)
         self.filter_2 = LLMNaiveFilter(self.llm_dict["Qwen/Qwen2.5-7B-Instruct"], budget=500)
         self.router = KNNRouter(candidate_llms=candidate_llms, encoder_name="sentence-transformers/all-MiniLM-L6-v2", k=5, ann_path="our_anno_knn.json")
+        # self.router = CascadeRouter(judge_llm=self.llm_dict["Qwen/Qwen2.5-14B-Instruct"], candidate_llm=candidate_llms, llm_dict=self.llm_dict, threshold=0.7)
         self.annotator = Annotator(self.candidate_llms, self.llm_dict, task=task)
 
     def run(self, raw_dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

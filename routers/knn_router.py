@@ -50,24 +50,6 @@ class KNNRouter(BaseRouter):
             return np.zeros((0, 0), dtype=np.float32)
         return np.vstack(all_embs)
 
-    def build_index_from_annotations(self, ann_path: str):
-        with open(ann_path, encoding='utf-8') as f:
-            data = json.load(f)
-        samples = []
-        routes = []
-        for d in data:
-            sample_text = d.get("text") or f"Q: {d.get('question','')}\nContext: {d.get('context','')}"
-            routed = d.get('route')
-            if routed is None:
-                continue
-            samples.append(sample_text)
-            routes.append(routed)
-        if len(samples) == 0:
-            raise ValueError("No routed samples found in annotations to build KNN index")
-        embs = self._encode_texts(samples)
-        self.sample_embs = embs.astype(np.float32)
-        self.routes = routes
-
     def score(self, sample: str, candidate_llms: List[str]) -> List[Dict[str, Any]]:
         if self.sample_embs is None or len(self.sample_embs) == 0:
             sample_words = set(sample.lower().split())
@@ -137,7 +119,6 @@ class KNNRouter(BaseRouter):
         with open(routes_path, encoding='utf-8') as f:
             router.routes = json.load(f)
         return router
-
 
     def build_from_annotations(self, out_dir: str):
         with open(self.ann_path, encoding='utf-8') as f:
