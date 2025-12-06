@@ -16,7 +16,7 @@ import os
 import urllib.request
 from typing import Any, Dict, Iterable, List, Optional
 
-from dataset import Dataset
+from base_structure.dataset import Dataset
 
 
 def _extract_field(d: Dict[str, Any], keys: Iterable[str]):
