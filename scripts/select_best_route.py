@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from misc.metrics import compute_bleu
-from misc.load_squad import download_squad, load_squad_to_qa_list
+from datasets import SquadDataset
 
 
 def load_annotations(path: Path) -> Dict[str, Dict[str, Any]]:
@@ -37,9 +37,10 @@ def load_annotations(path: Path) -> Dict[str, Dict[str, Any]]:
 
 
 def load_reference() -> Dict[str, str]:
-    download_squad()
-    data = load_squad_to_qa_list(max_samples=500)
-    out = {}
+    # download and load SQuAD via SquadDataset helper (preserves previous skip behavior)
+    ds = SquadDataset.from_url(save_path="squad_train.json", max_samples=500, skip_initial=500)
+    data = ds.to_list()
+    out: Dict[str, str] = {}
     for rec in data:
         sid = rec.get('id') or rec.get('idx') or rec.get('q_id')
         if sid is None:

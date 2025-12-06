@@ -1,9 +1,9 @@
 from typing import List, Dict, Any
 from annotation import Annotator
-from filtering import ActiveLearningFilter, LLMNaiveFilter
-from routing import KNNRouter, CascadeRouter
+from filters import ActiveLearningFilter, LLMNaiveFilter
+from routers import KNNRouter, CascadeRouter
 from task import QATask
-from misc.load_squad import download_squad, load_squad_to_qa_list
+from datasets import SquadDataset
 from utils import export_annotation_results
 from misc.llm_provider import LocalLLM, APILLM
 
@@ -53,9 +53,7 @@ class HumanLLMAnnotationSystem:
 
 
 if __name__ == "__main__":
-    # 下载并加载SQuAD v1.1数据集
-    download_squad()
-    raw_data = load_squad_to_qa_list(max_samples=10000)
+    raw_data = SquadDataset.from_url(save_path="squad_train.json", max_samples=10000, skip_initial=500, shuffle_seed=42)
     task = QATask()
 
     candidate_llms = ["Qwen/Qwen2.5-3B-Instruct",
