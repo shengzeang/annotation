@@ -116,61 +116,6 @@ class Dataset:
 	def __repr__(self) -> str:
 		return f"Dataset(num_examples={len(self)})"
 
-	@classmethod
-	def from_squad(
-		cls,
-		path: str = "squad_train.json",
-		max_samples: int = 200,
-		skip_initial: int = 500,
-		shuffle_seed: Optional[int] = None,
-	) -> "Dataset":
-		"""Create a Dataset of QA pairs from a SQuAD v1.1 JSON file.
-
-		Args:
-			path: path to the SQuAD JSON file.
-			max_samples: maximum number of QA examples to include.
-			skip_initial: number of examples to skip before collecting (keeps prior behaviour).
-			shuffle_seed: optional random seed to shuffle the resulting dataset.
-
-		Returns:
-			Dataset of dicts: {"id","question","context","answer","text"}
-		"""
-		with open(path, encoding="utf-8") as f:
-			squad = json.load(f)
-		qa_list: List[Dict[str, Any]] = []
-		i = 0
-		for article in squad.get("data", []):
-			for para in article.get("paragraphs", []):
-				context = para.get("context", "")
-				for qa in para.get("qas", []):
-					if qa.get("is_impossible", False):
-						continue
-					question = qa.get("question", "")
-					answers = qa.get("answers", [])
-					answer = answers[0].get("text", "") if answers else ""
-					i += 1
-					if i < skip_initial:
-						continue
-					qa_list.append(
-						{
-							"id": qa.get("id"),
-							"question": question,
-							"context": context,
-							"answer": answer,
-							"text": f"Question: {question}\nContext: {context}",
-						}
-					)
-					if len(qa_list) >= max_samples:
-						break
-				if len(qa_list) >= max_samples:
-					break
-			if len(qa_list) >= max_samples:
-				break
-		ds = cls.from_list(qa_list)
-		if shuffle_seed is not None:
-			ds = ds.shuffle(seed=shuffle_seed)
-		return ds
-
 
 def load_json_file(path: str, encoding: str = "utf-8") -> List[Dict[str, Any]]:
 	with open(path, encoding=encoding) as f:
