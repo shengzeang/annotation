@@ -126,3 +126,58 @@ def save_json_file(path: str, data: List[Dict[str, Any]], ensure_ascii: bool = F
 	with open(path, "w", encoding="utf-8") as f:
 		json.dump(data, f, ensure_ascii=ensure_ascii, indent=indent)
 
+
+class DatasetStorage:
+	"""
+	Simple storage wrapper around `Dataset` that exposes a minimal
+	`write`/`read` API compatible with dataflow-style operators.
+
+	Methods:
+	  - write(data): accept a `Dataset`, list of dicts, or dict and store as `Dataset`.
+	  - read(output_type="dataset"): return `Dataset` (default), list, or pandas.DataFrame (lazy).
+	  - get_keys_from_dataframe(): return list of keys for first example.
+	"""
+
+	def __init__(self):
+		self._dataset: Optional[Dataset] = None
+
+	def write(self, data: Any):
+		if isinstance(data, Dataset):
+			self._dataset = data
+		elif isinstance(data, list):
+			self._dataset = Dataset.from_list(data)
+		elif isinstance(data, dict):
+			self._dataset = Dataset.from_list([data])
+		else:
+			# Wrap unknown single value
+			self._dataset = Dataset.from_list([{"value": data}])
+
+	def read(self, output_type: str = "dataset") -> Any:
+		if self._dataset is None:
+			return None
+
+		opt = (output_type or "dataset").lower()
+		if opt in ("dataset", "ds"):
+			return self._dataset
+		if opt in ("list", "pylist", "dict"):
+			return self._dataset.to_list()
+		if opt in ("dataframe", "pd"):
+			try:
+				import pandas as pd
+
+				return pd.DataFrame(self._dataset.to_list())
+			except Exception:
+				return self._dataset.to_list()
+
+		return self._dataset
+
+	def get_keys_from_dataframe(self) -> List[str]:
+		if self._dataset is None:
+			return []
+		if len(self._dataset) == 0:
+			return []
+		first = self._dataset[0]
+		if isinstance(first, dict):
+			return list(first.keys())
+		return []
+
