@@ -3,7 +3,7 @@ import json
 from annotation import Annotator
 from filters import ActiveLearningFilter, LLMNaiveFilter
 from routers import KNNRouter, CascadeRouter
-from task import QATask
+from tasks import QATask
 from datasets import SquadDataset
 from utils import export_annotation_results
 from misc.llm_provider import LocalLLM, APILLM
