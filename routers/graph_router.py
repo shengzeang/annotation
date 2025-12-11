@@ -15,7 +15,7 @@ except Exception:
 
 class GraphRouter(BaseRouter):
     """Graph-based router: builds a bipartite graph between samples and models and propagates scores."""
-    def __init__(self, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", topk: int = 8, alpha: float = 0.85, device: Optional[str] = None, ann_path: Optional[str] = None):
+    def __init__(self, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", topk: int = 8, alpha: float = 0.85, device: Optional[str] = None, train_budget: int = 50):
         self.encoder_name = encoder_name
         self.tokenizer = AutoTokenizer.from_pretrained(self.encoder_name, trust_remote_code=True)
         self.encoder = AutoModel.from_pretrained(self.encoder_name, trust_remote_code=True)
@@ -28,7 +28,7 @@ class GraphRouter(BaseRouter):
         self.sample_embs: Optional[np.ndarray] = None
         self.model_list: List[str] = []
         self.sample_to_model_edges: List[List[str]] = []
-        self.ann_path = ann_path
+        self.train_budget = train_budget
 
     @property
     def if_train(self):
@@ -207,13 +207,11 @@ class GraphRouter(BaseRouter):
         return router
 
 
-    def build_from_annotations(self, out_dir: str):
-        with open(self.ann_path, encoding='utf-8') as f:
-            data = json.load(f)
+    def build_from_annotations(self, annotations, out_dir: str):
         samples = []
         sample_model_edges = []
         models_set = set()
-        for d in data:
+        for d in annotations:
             txt = d.get('text') or f"Q: {d.get('question','')}\nContext: {d.get('context','')}"
             route = d.get('route')
             if route is None:

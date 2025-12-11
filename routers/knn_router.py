@@ -10,7 +10,7 @@ from ..base_structure.base_router import BaseRouter
 
 class KNNRouter(BaseRouter):
     """KNN-based router using historical annotated samples."""
-    def __init__(self, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", k: int = 5, device: Optional[str] = None, ann_path: Optional[str] = None):
+    def __init__(self, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", k: int = 5, device: Optional[str] = None, train_budget: int = 50):
         self.encoder_name = encoder_name
         self.tokenizer = AutoTokenizer.from_pretrained(self.encoder_name, trust_remote_code=True)
         self.encoder = AutoModel.from_pretrained(self.encoder_name, trust_remote_code=True)
@@ -20,7 +20,7 @@ class KNNRouter(BaseRouter):
         self.k = int(k)
         self.sample_embs: Optional[np.ndarray] = None
         self.routes: List[str] = []
-        self.ann_path = ann_path
+        self.train_budget = train_budget
 
     @property
     def if_train(self):
@@ -120,12 +120,10 @@ class KNNRouter(BaseRouter):
             router.routes = json.load(f)
         return router
 
-    def build_from_annotations(self, out_dir: str):
-        with open(self.ann_path, encoding='utf-8') as f:
-            data = json.load(f)
+    def build_from_annotations(self, annotations, out_dir: str):
         samples = []
         routes = []
-        for d in data:
+        for d in annotations:
             sample_text = d.get("text") or f"Q: {d.get('question','')}\nContext: {d.get('context','')}"
             routed = d.get('route')
             if routed is None:

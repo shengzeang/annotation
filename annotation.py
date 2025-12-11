@@ -85,7 +85,7 @@ class Annotator:
             scored.sort(reverse=True, key=lambda x: x[0])
             return [x[1] for x in scored[:topk] if x[0] > 0]
 
-    def annotate(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+    def annotate(self, sample: Dict[str, Any], assigned_llm: str = None) -> Dict[str, Any]:
         if self.rag:
             # RAG 检索相似历史标注
             rag_examples = self._rag_retrieve(sample.get("question", ""), topk=3)
@@ -93,7 +93,10 @@ class Annotator:
             prompt = self.task.get_prompt(sample, rag_examples)
         else:
             prompt = self.task.get_prompt(sample)
-        llm = sample.get('route')
+        if assigned_llm == None:
+            llm = sample.get('route')
+        else:
+            llm = assigned_llm
         if llm not in self.candidate_llms:
             best_llm = self.candidate_llms[0]
             for candidate in self.candidate_llms:
@@ -118,5 +121,5 @@ class Annotator:
             self._save_knowledge_base()
         return result
 
-    def annotate_batch(self, dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        return [self.annotate(d) for d in tqdm(dataset)]
+    def annotate_batch(self, dataset: List[Dict[str, Any]], assigned_llm: str = None) -> List[Dict[str, Any]]:
+        return [self.annotate(d, assigned_llm) for d in tqdm(dataset)]

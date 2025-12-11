@@ -6,6 +6,7 @@ from task import QATask
 from datasets import SquadDataset
 from utils import export_annotation_results
 from misc.llm_provider import LocalLLM, APILLM
+from scripts.select_best_route import select_best
 
 
 # ==============================
@@ -27,17 +28,31 @@ class HumanLLMAnnotationSystem:
         else:
             raise ValueError(f"Unknown llm_mode: {llm_mode}")
 
-
         self.filter_1 = ActiveLearningFilter(method="alps", budget=1000, batch_size=50)
         self.filter_2 = LLMNaiveFilter(self.llm_dict["Qwen/Qwen2.5-7B-Instruct"], budget=500)
-        self.router = KNNRouter(candidate_llms=candidate_llms, encoder_name="sentence-transformers/all-MiniLM-L6-v2", k=5, ann_path="our_anno_knn.json")
+        self.router = KNNRouter(candidate_llms=candidate_llms, encoder_name="sentence-transformers/all-MiniLM-L6-v2", k=5, train_budget=100)
         # self.router = CascadeRouter(judge_llm=self.llm_dict["Qwen/Qwen2.5-14B-Instruct"], candidate_llm=candidate_llms, llm_dict=self.llm_dict, threshold=0.7)
         self.annotator = Annotator(self.candidate_llms, self.llm_dict, task=task)
 
+
     def run(self, raw_dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if self.router.if_train:
+            train_budget = self.router.train_budget
+            print("Step 0: router cold-start")
+            anno_file_list = []
+            for llm in self.candidate_llms:
+                print(f" - Warm-up annotating with {llm}")
+                annotations = self.annotator.annotate_batch(raw_dataset[:train_budget], assigned_llm=llm)
+                export_annotation_results(annotations, raw_dataset[:train_budget], output_path=f"{llm}_annos.json")
+                anno_file_list.append(f"{llm}_annos.json")
+            final_anno_file = "best_knn.json"
+            select_best(anno_file_list, out_path=final_anno_file)
+            with open(final_anno_file, encoding='utf-8') as f:
+                annotations = json.load(f)
+            self.router.build_from_annotations(annotations, out_dir="./")
 
         print("Step 1: stream filter")
-        filtered_data = self.filter_1.filter(raw_dataset)
+        filtered_data = self.filter_1.filter(raw_dataset[train_budget:])
         filtered_data = self.filter_2.filter(filtered_data)
 
         print("Step 2: LLM route")
@@ -48,7 +63,6 @@ class HumanLLMAnnotationSystem:
 
         # 导出人工复审池
         self.annotator.human_review_queue.export()
-
         return annotated
 
 

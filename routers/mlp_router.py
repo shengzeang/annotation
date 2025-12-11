@@ -15,7 +15,7 @@ class MLPRouter(BaseRouter):
     pairs and predicts a score in [0,1]. Supports training from labeled pairs and
     scoring new samples.
     """
-    def __init__(self, hidden_dim: int = 64, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", device: str = None, ann_path: Optional[str] = None):
+    def __init__(self, hidden_dim: int = 64, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", device: str = None, train_budget: int = 50):
         self.encoder_name = encoder_name
         self.tokenizer = AutoTokenizer.from_pretrained(self.encoder_name, trust_remote_code=True)
         self.encoder = AutoModel.from_pretrained(self.encoder_name, trust_remote_code=True)
@@ -24,7 +24,7 @@ class MLPRouter(BaseRouter):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.encoder.to(self.device)
         self.encoder.eval()
-        self.ann_path = ann_path
+        self.train_budget = train_budget
 
     @property
     def if_train(self):
@@ -160,16 +160,11 @@ class MLPRouter(BaseRouter):
         return router
 
 
-    def build_from_annotations(self, out_dir: str, candidate_llms: List[str], epochs: int = 200, batch_size: int = 32):
-        if self.ann_path is None:
-            raise ValueError("Annotation path not provided.")
-        
-        with open(self.ann_path, encoding="utf-8") as f:
-            data = json.load(f)
+    def build_from_annotations(self, annotations, out_dir: str, candidate_llms: List[str], epochs: int = 200, batch_size: int = 32):
         pairs = []
         positive_score = 1.0
         negative_score = 0.0
-        for d in data:
+        for d in annotations:
             sample_text = d.get("text") or f"Q: {d.get('question','')}\nContext: {d.get('context','')}"
             routed = d.get("route")
             for cand in candidate_llms:
