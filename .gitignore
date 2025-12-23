@@ -1,3 +1,4 @@
-final_annotation_results.json
 /.vscode
 *.pyc
+/frontend/node_modules
+/.venv
