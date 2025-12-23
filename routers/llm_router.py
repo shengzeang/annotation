@@ -2,7 +2,7 @@ from typing import List, Dict, Any
 from misc.llm_provider import LLMBase
 import math
 
-from ..base_structure.base_router import BaseRouter
+from base_structure.base_router import BaseRouter
 
 
 class LLMRouter(BaseRouter):

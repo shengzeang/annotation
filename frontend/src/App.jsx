@@ -35,7 +35,7 @@ const initialNodes = [
     id: 'n3',
     type: 'compact',
     position: { x: 40, y: 340 },
-    data: { label: 'CandidateLLMs', params: { candidate_llms: ['Qwen/Qwen2.5-7B-Instruct'] } },
+    data: { label: 'CandidateLLMs', params: { candidate_llms: ['gpt2', 'distilgpt2'] } },
   },
 
   // Pipeline nodes
@@ -49,13 +49,13 @@ const initialNodes = [
     id: 'n5',
     type: 'compact',
     position: { x: 460, y: 200 },
-    data: { label: 'Router', params: { router_class: 'routers.knn_router.KNNRouter', router_params: { k: 5 }, candidate_llms: ['Qwen/Qwen2.5-7B-Instruct'] } },
+    data: { label: 'Router', params: { router_class: 'routers.knn_router.KNNRouter', router_params: { k: 5 }, candidate_llms: ['gpt2', 'distilgpt2'] } },
   },
   {
     id: 'n6',
     type: 'compact',
     position: { x: 660, y: 200 },
-    data: { label: 'Annotate', params: { candidate_llms: ['Qwen/Qwen2.5-7B-Instruct'], llm_mode: 'local', task_class: 'tasks.qa.QATask' } },
+    data: { label: 'Annotate', params: { candidate_llms: ['gpt2', 'distilgpt2'], llm_mode: 'local', task_class: 'tasks.qa.QATask' } },
   },
   {
     id: 'n7',

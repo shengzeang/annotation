@@ -6,7 +6,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
-from task import Task, QATask
+from base_structure.base_task import Task
+from tasks.qa import QATask
 
 
 class HumanReviewQueue:
@@ -59,22 +60,34 @@ class Annotator:
 
     def _rag_retrieve(self, question: str, topk: int = 3):
         """支持BM25和TF-IDF两种RAG检索方式, 用户可选, 默认BM25"""
+        # return empty if no knowledge base or no usable texts
         if not self.knowledge_base:
             return []
         questions = [item.get("question", "") for item in self.knowledge_base]
+        # filter out empty or non-string entries
+        questions = [q for q in questions if isinstance(q, str) and q.strip()]
+        if not questions:
+            return []
         if self.rag_method == "bm25":
             tokenized_corpus = [q.lower().split() for q in questions]
+            # BM25 requires at least one non-empty document
+            if not tokenized_corpus or not any(len(t) > 0 for t in tokenized_corpus):
+                return []
             bm25 = BM25Okapi(tokenized_corpus)
             scores = bm25.get_scores(question.lower().split())
             top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:topk]
             return [self.knowledge_base[i] for i in top_indices if scores[i] > 0]
         elif self.rag_method == "tfidf":
-            tfidf = TfidfVectorizer().fit(questions + [question])
-            q_vecs = tfidf.transform(questions)
-            query_vec = tfidf.transform([question])
-            sims = cosine_similarity(query_vec, q_vecs)[0]
-            top_indices = sims.argsort()[::-1][:topk]
-            return [self.knowledge_base[i] for i in top_indices if sims[i] > 0]
+            # TF-IDF requires at least one non-empty document
+            try:
+                tfidf = TfidfVectorizer().fit(questions + [question])
+                q_vecs = tfidf.transform(questions)
+                query_vec = tfidf.transform([question])
+                sims = cosine_similarity(query_vec, q_vecs)[0]
+                top_indices = sims.argsort()[::-1][:topk]
+                return [self.knowledge_base[i] for i in top_indices if sims[i] > 0]
+            except Exception:
+                return []
         else:
             # fallback: 词重叠
             scored = []
@@ -122,4 +135,21 @@ class Annotator:
         return result
 
     def annotate_batch(self, dataset: List[Dict[str, Any]], assigned_llm: str = None) -> List[Dict[str, Any]]:
-        return [self.annotate(d, assigned_llm) for d in tqdm(dataset)]
+        # normalize items: accept strings or non-dict items from routers/filters
+        normalized = []
+        for d in dataset:
+            if isinstance(d, str):
+                normalized.append({"text": d})
+            elif isinstance(d, dict):
+                normalized.append(d)
+            else:
+                try:
+                    if hasattr(d, 'to_dict'):
+                        normalized.append(d.to_dict())
+                    elif hasattr(d, 'to_list'):
+                        normalized.append({'items': d.to_list()})
+                    else:
+                        normalized.append(dict(d))
+                except Exception:
+                    normalized.append({"text": str(d)})
+        return [self.annotate(d, assigned_llm) for d in tqdm(normalized)]

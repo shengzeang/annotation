@@ -3,7 +3,7 @@ import json
 from annotation import Annotator
 from filters import ActiveLearningFilter, LLMNaiveFilter
 from routers import KNNRouter, CascadeRouter
-from tasks import QATask
+from tasks.qa import QATask
 from datasets import SquadDataset
 from utils import export_annotation_results
 from misc.llm_provider import LocalLLM, APILLM
@@ -31,26 +31,23 @@ class HumanLLMAnnotationSystem:
 
         self.filter_1 = ActiveLearningFilter(method="alps", budget=1000, batch_size=50)
         self.filter_2 = LLMNaiveFilter(self.llm_dict["Qwen/Qwen2.5-7B-Instruct"], budget=500)
-        self.router = KNNRouter(candidate_llms=candidate_llms, encoder_name="sentence-transformers/all-MiniLM-L6-v2", k=5, train_budget=100)
-        # self.router = CascadeRouter(judge_llm=self.llm_dict["Qwen/Qwen2.5-14B-Instruct"], candidate_llm=candidate_llms, llm_dict=self.llm_dict, threshold=0.7)
+        # create annotator first and pass it to the router which requires it
         self.annotator = Annotator(self.candidate_llms, self.llm_dict, task=task)
+        self.router = KNNRouter(self.annotator, candidate_llms, encoder_name="sentence-transformers/all-MiniLM-L6-v2", k=5, train_budget=100)
+        # self.router = CascadeRouter(judge_llm=self.llm_dict["Qwen/Qwen2.5-14B-Instruct"], candidate_llm=candidate_llms, llm_dict=self.llm_dict, threshold=0.7)
 
 
     def run(self, raw_dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # ensure train_budget is available regardless of router implementation
+        train_budget = getattr(self.router, 'train_budget', 0)
         if self.router.if_train:
-            train_budget = self.router.train_budget
-            print("Step 0: router cold-start")
-            anno_file_list = []
-            for llm in self.candidate_llms:
-                print(f" - Warm-up annotating with {llm}")
-                annotations = self.annotator.annotate_batch(raw_dataset[:train_budget], assigned_llm=llm)
-                export_annotation_results(annotations, raw_dataset[:train_budget], output_path=f"{llm}_annos.json")
-                anno_file_list.append(f"{llm}_annos.json")
-            final_anno_file = "best_knn.json"
-            select_best(anno_file_list, out_path=final_anno_file)
-            with open(final_anno_file, encoding='utf-8') as f:
-                annotations = json.load(f)
-            self.router.build_from_annotations(annotations, out_dir="./")
+            # perform router cold-start using centralized method on router
+            self.router.cold_start(raw_dataset,
+                                  annotator=self.annotator,
+                                  candidate_llms=self.candidate_llms,
+                                  export_fn=export_annotation_results,
+                                  select_best_fn=select_best,
+                                  final_anno_file="best_knn.json")
 
         print("Step 1: stream filter")
         filtered_data = self.filter_1.filter(raw_dataset[train_budget:])

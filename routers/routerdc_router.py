@@ -5,7 +5,7 @@ from transformers import AutoTokenizer, AutoModel
 import numpy as np
 import json
 
-from ..base_structure.base_router import BaseRouter
+from base_structure.base_router import BaseRouter
 
 
 class RouterDCRouter(BaseRouter):

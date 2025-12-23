@@ -96,6 +96,19 @@ def instantiate_class_from_module(fullname: str, *args, **kwargs):
 @app.route('/run_graph', methods=['POST'])
 def run_graph():
     payload = request.get_json(force=True)
+    # persist incoming payload for debugging / audit
+    try:
+        import json, time
+        dump_path = os.path.join(ROOT_DIR, f"run_graph_payload_{int(time.time())}.json")
+        with open(dump_path, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2)
+        # also write latest copy to a stable file
+        latest_path = os.path.join(ROOT_DIR, 'last_run_graph_payload.json')
+        with open(latest_path, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2)
+        app.logger.info('Saved /run_graph payload to %s', dump_path)
+    except Exception:
+        app.logger.exception('Failed to write run_graph payload for debugging')
     nodes = payload.get('nodes', [])
     edges = payload.get('edges', [])
 
@@ -165,15 +178,48 @@ def run_graph():
 
             elif ntype == 'Router':
                 clsname = params.get('router_class', 'routers.KNNRouter')
-                rparams = params.get('router_params', {})
+                rparams = params.get('router_params', {}) or {}
                 candidate_llms = params.get('candidate_llms', [])
                 try:
-                    router = instantiate_class_from_module(clsname, **rparams)
-                    # set candidate_llms attribute if present
-                    if hasattr(router, 'candidate_llms'):
-                        router.candidate_llms = candidate_llms
-                    else:
-                        setattr(router, 'candidate_llms', candidate_llms)
+                    # import the class so we can inspect its __init__ signature
+                    module_name, class_name = clsname.rsplit('.', 1)
+                    mod = importlib.import_module(module_name)
+                    cls = getattr(mod, class_name)
+                    # Build an Annotator instance so routers that require it receive one
+                    try:
+                        from misc.llm_provider import LocalLLM, APILLM
+                        from annotation import Annotator
+                        # router-level llm params (fallbacks)
+                        r_llm_mode = params.get('llm_mode', 'local')
+                        r_api_config = params.get('api_config', {}) or {}
+                        r_task_class = params.get('task_class', 'tasks.QATask')
+
+                        # build llm_dict
+                        llm_dict = {}
+                        if r_llm_mode == 'local':
+                            for name in candidate_llms:
+                                llm_dict[name] = LocalLLM(name)
+                        else:
+                            for name in candidate_llms:
+                                conf = r_api_config.get(name, {})
+                                llm_dict[name] = APILLM(conf.get('api_url', ''), conf.get('api_key'), conf.get('extra_headers'))
+
+                        # instantiate task class
+                        task_mod, task_name = r_task_class.rsplit('.', 1)
+                        task_cls = getattr(importlib.import_module(task_mod), task_name)
+                        task = task_cls()
+
+                        annotator = Annotator(candidate_llms, llm_dict, task=task)
+                    except Exception:
+                        annotator = None
+
+                    # prepare kwargs for constructor
+                    init_kwargs = dict(rparams)
+                    init_kwargs['annotator'] = annotator
+                    init_kwargs['candidate_llms'] = candidate_llms
+
+                    router = cls(**init_kwargs)
+
                     input_data = flat_input[0] if flat_input else []
                     out = router.route(input_data)
                 except Exception as e:
@@ -205,7 +251,8 @@ def run_graph():
 
                     from annotation import Annotator
                     annotator = Annotator(candidate_llms, llm_dict, task=task)
-                    input_data = flat_input[0] if flat_input else []
+                    # pass the full list of samples to annotate_batch
+                    input_data = flat_input if flat_input else []
                     out = annotator.annotate_batch(input_data)
                     # collect any low-confidence items queued for human review
                     try:
@@ -225,9 +272,38 @@ def run_graph():
                 if path:
                     try:
                         import json
-                        with open(path, 'w', encoding='utf-8') as f:
-                            json.dump(input_data, f, ensure_ascii=False, indent=2)
-                        out = {'saved_to': path}
+                        # resolve relative paths under ROOT_DIR
+                        full_path = path if os.path.isabs(path) else os.path.join(ROOT_DIR, path)
+                        parent = os.path.dirname(full_path)
+                        if parent and not os.path.exists(parent):
+                            os.makedirs(parent, exist_ok=True)
+                        # ensure data is JSON-serializable
+                        def _to_jsonable(o):
+                            try:
+                                json.dumps(o)
+                                return o
+                            except TypeError:
+                                try:
+                                    if hasattr(o, 'to_list'):
+                                        return _to_jsonable(o.to_list())
+                                except Exception:
+                                    pass
+                                try:
+                                    if hasattr(o, 'to_dict'):
+                                        return _to_jsonable(o.to_dict())
+                                except Exception:
+                                    pass
+                                try:
+                                    if hasattr(o, '__dict__'):
+                                        return _to_jsonable({k: v for k, v in o.__dict__.items()})
+                                except Exception:
+                                    pass
+                                return str(o)
+
+                        jsonable = _to_jsonable(input_data)
+                        with open(full_path, 'w', encoding='utf-8') as f:
+                            json.dump(jsonable, f, ensure_ascii=False, indent=2)
+                        out = {'saved_to': full_path}
                     except Exception as e:
                         out = {'error': str(e), 'trace': traceback.format_exc()}
                 else:
@@ -257,11 +333,62 @@ def run_graph():
         except Exception:
             pass
 
-        if not outputs:
-            # return full context
-            return jsonify({'status': 'ok', 'context': context})
-        return jsonify({'status': 'ok', 'outputs': outputs, 'context': context})
+        # Ensure context/outputs are JSON serializable (datasets and custom objects may not be)
+        def make_jsonable(obj):
+            import json
+            try:
+                json.dumps(obj)
+                return obj
+            except TypeError:
+                # dict-like
+                if isinstance(obj, dict):
+                    return {k: make_jsonable(v) for k, v in obj.items()}
+                # iterable (but not string)
+                if isinstance(obj, (list, tuple, set)):
+                    return [make_jsonable(x) for x in obj]
+                # try common conversion methods
+                try:
+                    if hasattr(obj, 'to_dict'):
+                        return make_jsonable(obj.to_dict())
+                except Exception:
+                    pass
+                try:
+                    if hasattr(obj, 'to_list'):
+                        return make_jsonable(obj.to_list())
+                except Exception:
+                    pass
+                # fallback to __dict__ if available
+                try:
+                    if hasattr(obj, '__dict__'):
+                        return make_jsonable({k: v for k, v in obj.__dict__.items()})
+                except Exception:
+                    pass
+                # last resort: string representation
+                try:
+                    return str(obj)
+                except Exception:
+                    return None
+
+        serializable_context = {k: make_jsonable(v) for k, v in context.items()}
+        serializable_outputs = {k: make_jsonable(v) for k, v in outputs.items()}
+
+        if not serializable_outputs:
+            return jsonify({'status': 'ok', 'context': serializable_context})
+        return jsonify({'status': 'ok', 'outputs': serializable_outputs, 'context': serializable_context})
     except Exception as e:
+        # save error details to disk for debugging
+        try:
+            import json, time
+            err = {'ts': int(time.time()), 'error': str(e), 'trace': traceback.format_exc(), 'payload': payload}
+            err_path = os.path.join(ROOT_DIR, f"run_graph_error_{int(time.time())}.json")
+            with open(err_path, 'w', encoding='utf-8') as fh:
+                json.dump(err, fh, ensure_ascii=False, indent=2)
+            latest_err = os.path.join(ROOT_DIR, 'last_run_graph_error.json')
+            with open(latest_err, 'w', encoding='utf-8') as fh:
+                json.dump(err, fh, ensure_ascii=False, indent=2)
+            app.logger.error('Saved run_graph error to %s', err_path)
+        except Exception:
+            app.logger.exception('Failed to persist run_graph error')
         return jsonify({'status': 'error', 'error': str(e), 'trace': traceback.format_exc()}), 500
 
 

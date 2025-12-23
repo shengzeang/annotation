@@ -4,7 +4,7 @@ import os
 import json
 import torch
 from transformers import AutoTokenizer, AutoModel
-from ..base_structure.base_router import BaseRouter
+from base_structure.base_router import BaseRouter
 
 try:
     import scipy.sparse as sp
@@ -15,7 +15,9 @@ except Exception:
 
 class GraphRouter(BaseRouter):
     """Graph-based router: builds a bipartite graph between samples and models and propagates scores."""
-    def __init__(self, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", topk: int = 8, alpha: float = 0.85, device: Optional[str] = None, train_budget: int = 50):
+    def __init__(self, annotator, candidate_llms, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", topk: int = 8, alpha: float = 0.85, device: Optional[str] = None, train_budget: int = 50):
+        self.annotator = annotator
+        self.candidate_llms = candidate_llms
         self.encoder_name = encoder_name
         self.tokenizer = AutoTokenizer.from_pretrained(self.encoder_name, trust_remote_code=True)
         self.encoder = AutoModel.from_pretrained(self.encoder_name, trust_remote_code=True)

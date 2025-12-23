@@ -12,7 +12,17 @@ class LLMBase:
 class LocalLLM(LLMBase):
     def __init__(self, model_name: str):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
+        try:
+            # prefer automatic device mapping when available
+            self.model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
+        except ValueError as e:
+            # transformers raises a ValueError if `accelerate` is required but not installed
+            msg = str(e)
+            if 'requires `accelerate`' in msg or 'device_map' in msg:
+                # fallback to loading without device_map (loads to CPU or default device)
+                self.model = AutoModelForCausalLM.from_pretrained(model_name)
+            else:
+                raise
 
     def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
         device = next(self.model.parameters()).device

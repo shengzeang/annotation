@@ -6,7 +6,7 @@ import numpy as np
 import os
 import json
 
-from ..base_structure.base_router import BaseRouter
+from base_structure.base_router import BaseRouter
 
 
 class MLPRouter(BaseRouter):
@@ -15,7 +15,9 @@ class MLPRouter(BaseRouter):
     pairs and predicts a score in [0,1]. Supports training from labeled pairs and
     scoring new samples.
     """
-    def __init__(self, hidden_dim: int = 64, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", device: str = None, train_budget: int = 50):
+    def __init__(self, annotator, candidate_llms, hidden_dim: int = 64, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", device: str = None, train_budget: int = 50):
+        self.annotator = annotator
+        self.candidate_llms = candidate_llms
         self.encoder_name = encoder_name
         self.tokenizer = AutoTokenizer.from_pretrained(self.encoder_name, trust_remote_code=True)
         self.encoder = AutoModel.from_pretrained(self.encoder_name, trust_remote_code=True)
@@ -160,14 +162,14 @@ class MLPRouter(BaseRouter):
         return router
 
 
-    def build_from_annotations(self, annotations, out_dir: str, candidate_llms: List[str], epochs: int = 200, batch_size: int = 32):
+    def build_from_annotations(self, annotations, out_dir: str, epochs: int = 200, batch_size: int = 32):
         pairs = []
         positive_score = 1.0
         negative_score = 0.0
         for d in annotations:
             sample_text = d.get("text") or f"Q: {d.get('question','')}\nContext: {d.get('context','')}"
             routed = d.get("route")
-            for cand in candidate_llms:
+            for cand in self.candidate_llms:
                 score = positive_score if cand == routed else negative_score
                 pairs.append({"sample": sample_text, "candidate": cand, "score": float(score)})
         self.train(pairs, epochs=epochs, batch_size=batch_size)

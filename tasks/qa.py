@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import unicodedata, re
 from typing import Dict, Any
-from ..base_structure.base_task import Task
+from base_structure.base_task import Task
 
 
 class QATask(Task):

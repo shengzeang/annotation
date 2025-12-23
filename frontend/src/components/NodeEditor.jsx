@@ -180,7 +180,7 @@ export default function NodeEditor({ node, updateNodeData, deleteNode, openConfi
             </div>
             <div style={{ marginTop: 8 }}>
               <label>Candidate LLMs (optional)</label>
-                <textarea value={(params.candidate_llms || []).join('\n')} placeholder="e.g. Qwen/Qwen2.5-7B-Instruct" onChange={(e) => setParam('candidate_llms', e.target.value.split('\n').map((s) => s.trim()).filter(Boolean))} rows={4} style={{ width: '100%' }} />
+                <textarea value={(params.candidate_llms || []).join('\n')} placeholder={"e.g. gpt2\ndistilgpt2"} onChange={(e) => setParam('candidate_llms', e.target.value.split('\n').map((s) => s.trim()).filter(Boolean))} rows={4} style={{ width: '100%' }} />
             </div>
           </div>
         );

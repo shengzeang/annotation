@@ -5,12 +5,15 @@ import os
 import json
 import torch
 
-from ..base_structure.base_router import BaseRouter
+from base_structure.base_router import BaseRouter
 
 
 class KNNRouter(BaseRouter):
     """KNN-based router using historical annotated samples."""
-    def __init__(self, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", k: int = 5, device: Optional[str] = None, train_budget: int = 50):
+    def __init__(self, annotator, candidate_llms, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", k: int = 5, device: Optional[str] = None, train_budget: int = 50):
+        # annotator and candidate_llms are required for router cold-start
+        self.annotator = annotator
+        self.candidate_llms = candidate_llms
         self.encoder_name = encoder_name
         self.tokenizer = AutoTokenizer.from_pretrained(self.encoder_name, trust_remote_code=True)
         self.encoder = AutoModel.from_pretrained(self.encoder_name, trust_remote_code=True)
@@ -21,6 +24,7 @@ class KNNRouter(BaseRouter):
         self.sample_embs: Optional[np.ndarray] = None
         self.routes: List[str] = []
         self.train_budget = train_budget
+        self.ready = False
 
     @property
     def if_train(self):
@@ -108,7 +112,9 @@ class KNNRouter(BaseRouter):
             raise FileNotFoundError(meta_path)
         with open(meta_path, encoding='utf-8') as f:
             meta = json.load(f)
-        router = cls(encoder_name=meta.get('encoder_name'), k=meta.get('k', 5), device=device)
+        # when loading from disk we don't necessarily have an annotator available;
+        # pass placeholders for annotator and candidate_llms to satisfy ctor
+        router = cls(None, [], encoder_name=meta.get('encoder_name'), k=meta.get('k', 5), device=device)
         emb_path = os.path.join(dirpath, 'sample_embs.npy')
         if not os.path.exists(emb_path):
             raise FileNotFoundError(emb_path)

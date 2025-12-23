@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional, Tuple
 
-from ..base_structure.base_router import BaseRouter
+from base_structure.base_router import BaseRouter
 
 
 class CascadeRouter(BaseRouter):
