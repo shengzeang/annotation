@@ -31,16 +31,18 @@ export default function Sidebar({ setNodes, nodes }) {
 
   return (
     <aside className="sidebar">
-      <h3>Palette</h3>
-      {nodeTypes.map((n) => (
-        <div key={n.type} className="node-item" onClick={() => handleAdd(n.type)}>
-          <div style={{ fontSize: 18 }}>{n.icon}</div>
-          <div style={{ flex: 1 }}>{n.label}</div>
-        </div>
-      ))}
-      <hr />
-      <div className="howto">
-        <strong style={{ display: 'block', marginBottom: 6 }}>How to use</strong>
+      <h3 className="text-sm font-semibold text-slate-700">Palette</h3>
+      <div className="mt-3 space-y-2">
+        {nodeTypes.map((n) => (
+          <div key={n.type} className="node-item flex items-center" onClick={() => handleAdd(n.type)}>
+            <div className="text-lg mr-2">{n.icon}</div>
+            <div className="flex-1 text-sm text-slate-900">{n.label}</div>
+          </div>
+        ))}
+      </div>
+      <hr className="my-3 border-slate-100" />
+      <div className="howto text-sm text-slate-600">
+        <strong className="block mb-2">How to use</strong>
         <div>- Click a node to add to canvas</div>
         <div>- Select a node to edit params</div>
         <div>- Connect edges to form flow</div>

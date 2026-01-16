@@ -1,4 +1,5 @@
 from typing import List, Dict, Any
+import logging
 import json
 from annotation import Annotator
 from filters import ActiveLearningFilter, LLMNaiveFilter
@@ -49,14 +50,13 @@ class HumanLLMAnnotationSystem:
                                   select_best_fn=select_best,
                                   final_anno_file="best_knn.json")
 
-        print("Step 1: stream filter")
+        logger = logging.getLogger(__name__)
+        logger.info("Step 1: stream filter")
         filtered_data = self.filter_1.filter(raw_dataset[train_budget:])
         filtered_data = self.filter_2.filter(filtered_data)
-
-        print("Step 2: LLM route")
+        logger.info("Step 2: LLM route")
         routed = self.router.route(filtered_data)
-
-        print("Step 3: LLM annotation")
+        logger.info("Step 3: LLM annotation")
         annotated = self.annotator.annotate_batch(routed)
 
         # 导出人工复审池
@@ -76,7 +76,8 @@ if __name__ == "__main__":
     system = HumanLLMAnnotationSystem(candidate_llms, task)
     results = system.run(raw_data)
 
-    print(f"\n最终得到 {len(results)} 条标注结果")
+    logger = logging.getLogger(__name__)
+    logger.info("\n最终得到 %d 条标注结果", len(results))
 
     # 只导出自动标注通过的结果（needs_human=False）
     auto_results = [r for r in results if not r.get("needs_human", False)]

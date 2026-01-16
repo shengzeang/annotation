@@ -1,62 +1,79 @@
 :root{
-	--bg: #f5f7fb;
-	--panel: #ffffff;
+	--bg: #f7f9fc;
+	--surface: #ffffff;
 	--muted: #6b7280;
-	--accent: #3b82f6;
-	--radius: 10px;
-	--shadow: 0 6px 18px rgba(15,23,42,0.08);
+	--accent: #2563eb;
+	--radius: 12px;
+	--shadow-soft: 0 6px 18px rgba(2,6,23,0.06);
+	--panel-bg: #ffffff;
 }
-html, body, #root { height: 100%; margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background: var(--bg); color: #111827 }
-.reactflow-wrapper { height: 100%; }
-.sidebar { width: 240px; padding: 12px; background: linear-gradient(180deg,#ffffffcc, #f7fafc); box-shadow: var(--shadow); border-radius: 0 12px 12px 0; }
-.sidebar h3 { margin: 0 0 8px 0; font-size: 14px; color: #0f172a }
-.node-item { padding: 10px 12px; background: #fff; border: 1px solid #eef2ff; margin-bottom: 8px; cursor: pointer; border-radius: 8px; box-shadow: 0 2px 6px rgba(15,23,42,0.04); transition: transform .12s ease, box-shadow .12s ease; display:flex; align-items:center; gap:8px }
-.node-item:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(2,6,23,0.08) }
-.sidebar .howto { font-size: 12px; color: var(--muted); margin-top:8px }
 
-/* Panel and buttons */
-.reactflow__panel button { background: var(--accent); color: white; border: none; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-weight: 600 }
-.reactflow__panel button[disabled] { opacity: 0.5; cursor: default }
+html, body, #root { height: 100%; margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background: var(--bg); color: #0f172a }
 
-/* Button utilities */
-.btn { display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:8px; border:1px solid transparent; cursor:pointer; font-weight:600 }
-.btn svg { display:block }
-.btn-primary { background: var(--accent); color: white; border-color: rgba(59,130,246,0.12) }
-.btn-secondary { background: transparent; color: #0f172a; border-color: #e6eef6 }
-.btn:active { transform: translateY(1px) }
+/* App layout helpers */
+.app-main { height: 100vh; display: flex; flex-direction: row; gap: 12px }
+.sidebar { width: 220px; box-sizing: border-box; padding: 16px; background: var(--surface); box-shadow: none; border-radius: 12px; border: 1px solid #eef4fb }
+.sidebar h3 { margin: 0 0 12px 0; font-size: 14px; color: #0f172a }
+.sidebar .section { margin-bottom: 12px }
+.node-item { padding: 12px; background: var(--surface); border: 1px solid #eef4fb; margin-bottom: 10px; cursor: pointer; border-radius: 10px; transition: background .12s ease, transform .08s ease; display:flex; align-items:center; gap:10px }
+.node-item:hover { background: #f3f6fb; transform: translateY(-2px) }
+.sidebar .howto { font-size: 13px; color: var(--muted); margin-top:6px }
 
-/* Panel actions layout */
+/* Canvas area */
+.canvas-wrap { flex: 1; display:flex; flex-direction:column; gap: 0; }
+.canvas-topbar { display:flex; align-items:center; justify-content:space-between; padding: 12px 16px; background: transparent }
 .panel-actions { display:flex; gap:8px; align-items:center }
 
-/* Node editor refinements */
-.node-editor { width: 360px; background: linear-gradient(180deg,#ffffff, #fbfdff); border-left: 1px solid #e6edf3; padding: 18px; display:flex; flex-direction:column; gap:14px; box-shadow: var(--shadow) }
+/* Buttons */
+.btn { display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:10px; border:1px solid transparent; cursor:pointer; font-weight:600; font-size:14px }
+.btn svg { display:block }
+.btn-primary { background: var(--accent); color: white; border-color: transparent }
+.btn-ghost { background: transparent; color: #0f172a; border: 1px solid #eef4fb }
+.btn-outline { background: transparent; color: var(--muted); border: 1px solid #eef4fb }
+.btn:active { transform: translateY(1px) }
+
+/* Right panel */
+.right-panel { width: 380px; border-left: none; display:flex; flex-direction:column; gap:12px }
+.right-shell { border-left: 1px solid #eef4fb; padding: 18px; background: var(--surface); border-radius: 10px; height: calc(100vh - 32px); overflow:auto }
+
+.top-tabs { display:flex; gap:8px; margin-bottom: 12px }
+.top-tabs .tab { padding:8px 12px; border-radius: 10px; background: transparent; border: 1px solid transparent; cursor:pointer }
+.top-tabs .tab.active { background: var(--accent); color: #fff }
+
+/* Review queue card */
+.card { background: var(--panel-bg); padding: 12px; border-radius: var(--radius); border: 1px solid #eef4fb }
+.card h4 { margin: 0 0 8px 0 }
+
+.review-list { max-height: 420px; overflow:auto; padding-right: 6px }
+.review-list .item { padding: 10px; border-radius: 8px; display:flex; gap:8px; align-items:flex-start }
+.review-list .item.active { background: #f8fafc }
+.review-list .badge { font-size:11px; padding:3px 8px; border-radius:999px }
+
+/* Results */
+.results-section { padding: 8px 0 }
+.results-item { border: 1px solid #eef4fb; border-radius: 10px; padding: 12px; margin-bottom: 10px; background: #fff }
+.results-item .title { font-weight: 700; margin-bottom:6px }
+.results-item .meta { font-size: 12px; color: var(--muted) }
+
+/* Node editor */
+.node-editor { box-sizing: border-box; background: var(--panel-bg); border-left: 1px solid #eef4fb; padding: 18px; display:flex; flex-direction:column; gap:14px; border-radius: 10px }
 .node-editor h3 { margin: 0; font-size: 16px }
-.node-meta { display:flex; justify-content:space-between; align-items:center }
-.node-meta .muted { color: var(--muted); font-size: 12px }
 .field-row { display:flex; flex-direction:column; gap:6px }
-.field-row label { font-size: 12px; color: var(--muted); font-weight:600 }
-.field-row input, .field-row textarea, .field-row select { padding:8px 10px; border-radius:8px; border:1px solid #e6eef6; background:#fbfdff; font-size:13px }
+.field-row label { font-size: 13px; color: var(--muted); font-weight:600 }
+.field-row input, .field-row textarea, .field-row select { padding:10px 12px; border-radius:10px; border:1px solid #e6eef6; background:#fff; font-size:14px }
 .field-row textarea { resize:vertical }
 .node-editor .actions { display:flex; justify-content:flex-end; gap:8px }
 
-.small-muted { font-size:12px; color:var(--muted) }
-
-/* Right-side node editor */
-.node-editor { width: 340px; background: var(--panel); border-left: 1px solid #e6edf3; padding: 16px; display:flex; flex-direction:column; gap:12px }
-.node-editor h3 { margin: 0; font-size: 16px }
-.field-row { display:flex; flex-direction:column; gap:6px }
-.field-row label { font-size: 12px; color: var(--muted) }
-.field-row input, .field-row textarea { padding:8px 10px; border-radius:8px; border:1px solid #e6eef6; background:#fbfdff }
-.small-muted { font-size:12px; color:var(--muted) }
-
-/* Compact node list inside nodes */
-.compact-list { max-height:120px; overflow:auto }
-.compact-list div { padding:2px 0 }
-
-/* Animate node movements (React Flow applies transform to .react-flow__node) */
-.react-flow__node {
-	transition: transform 380ms cubic-bezier(.2,.9,.2,1), opacity 160ms ease;
-}
-
-/* Slight hover effect */
+/* ReactFlow node animations */
+.react-flow__node { transition: transform 280ms cubic-bezier(.2,.9,.2,1), opacity 160ms ease }
 .react-flow__node:hover { z-index: 9999 }
+
+/* Scrollbar polish */
+::-webkit-scrollbar { height:10px; width:10px }
+::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 8px }
+::-webkit-scrollbar-track { background: transparent }
+
+@media (max-width: 960px) {
+	.sidebar { display:none }
+	.right-panel { width: 320px }
+}

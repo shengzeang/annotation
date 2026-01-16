@@ -23,12 +23,31 @@ class LocalLLM(LLMBase):
                 self.model = AutoModelForCausalLM.from_pretrained(model_name)
             else:
                 raise
+        # Ensure pad token is set to avoid transformers warning during generation
+        try:
+            if getattr(self.tokenizer, 'pad_token', None) is None:
+                # prefer eos token as pad if available
+                if getattr(self.tokenizer, 'eos_token', None) is not None:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
+            # sync model config pad token id
+            if getattr(self.model, 'config', None) is not None and getattr(self.tokenizer, 'pad_token_id', None) is not None:
+                self.model.config.pad_token_id = self.tokenizer.pad_token_id
+        except Exception:
+            pass
 
     def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
         device = next(self.model.parameters()).device
         inputs = self.tokenizer(prompt, return_tensors="pt").to(device)
         with torch.no_grad():
-            output_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=True)
+            # explicitly pass pad_token_id to silence tokenizer/model warnings
+            gen_kwargs = dict(max_new_tokens=max_new_tokens, do_sample=True)
+            try:
+                pad_id = getattr(self.tokenizer, 'pad_token_id', None)
+                if pad_id is not None:
+                    gen_kwargs['pad_token_id'] = int(pad_id)
+            except Exception:
+                pass
+            output_ids = self.model.generate(**inputs, **gen_kwargs)
         output_text = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
         if output_text.startswith(prompt):
             return output_text[len(prompt):].strip()

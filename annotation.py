@@ -1,4 +1,5 @@
 import random
+import logging
 from typing import List, Dict, Any
 from tqdm import tqdm
 from rank_bm25 import BM25Okapi
@@ -22,12 +23,13 @@ class HumanReviewQueue:
         import json
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(self.queue, f, ensure_ascii=False, indent=2)
-        print(f"Human review queue exported to {filepath}")
+        logger = logging.getLogger(__name__)
+        logger.info("Human review queue exported to %s", filepath)
 
 
 class Annotator:
     """使用 Qwen 进行标注, LLM调用抽象化"""
-    def __init__(self, candidate_llms, llm_dict, confidence_threshold: float = 0.7, rag: bool = True,
+    def __init__(self, candidate_llms, llm_dict, confidence_threshold: float = 0.7, rag: bool = False,
                  rag_method: str = "bm25", kb_path: str = "knowledge_base.json", task: Task = None):
         self.candidate_llms = candidate_llms
         self.llm_dict = llm_dict
@@ -46,10 +48,12 @@ class Annotator:
             try:
                 with open(self.kb_path, "r", encoding="utf-8") as f:
                     kb = json.load(f)
-                print(f"Loaded knowledge base from {self.kb_path}, size={len(kb)}")
+                logger = logging.getLogger(__name__)
+                logger.info("Loaded knowledge base from %s, size=%d", self.kb_path, len(kb))
                 return kb
             except Exception as e:
-                print(f"Failed to load knowledge base: {e}")
+                logger = logging.getLogger(__name__)
+                logger.exception("Failed to load knowledge base: %s", e)
         return []
 
     def _save_knowledge_base(self):
@@ -134,7 +138,7 @@ class Annotator:
             self._save_knowledge_base()
         return result
 
-    def annotate_batch(self, dataset: List[Dict[str, Any]], assigned_llm: str = None) -> List[Dict[str, Any]]:
+    def annotate_batch(self, dataset: List[Dict[str, Any]], assigned_llm: str = None, progress_cb=None) -> List[Dict[str, Any]]:
         # normalize items: accept strings or non-dict items from routers/filters
         normalized = []
         for d in dataset:
@@ -152,4 +156,19 @@ class Annotator:
                         normalized.append(dict(d))
                 except Exception:
                     normalized.append({"text": str(d)})
-        return [self.annotate(d, assigned_llm) for d in tqdm(normalized)]
+
+        results = []
+        total = len(normalized)
+        # If caller did not pass a progress_cb, allow instance-level `self.progress_cb` to be used
+        if progress_cb is None:
+            progress_cb = getattr(self, 'progress_cb', None)
+        for i, d in enumerate(tqdm(normalized)):
+            res = self.annotate(d, assigned_llm)
+            results.append(res)
+            # report progress if callback provided: (current, total, info)
+            try:
+                if progress_cb is not None:
+                    progress_cb(i + 1, total, {'assigned_llm': assigned_llm})
+            except Exception:
+                pass
+        return results

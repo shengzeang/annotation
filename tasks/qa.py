@@ -25,14 +25,40 @@ class QATask(Task):
 
     def parse_output(self, output: str) -> Dict[str, Any]:
         annotation, conf = "unknown", None
-        if "Confidence" in output:
-            try:
-                parts = output.split("Confidence")
-                annotation = parts[0].split(":")[-1].strip().replace(",", "")
-                conf = float(parts[1].split("\n")[0].replace(":", "").strip())
-            except:
-                pass
-        if conf == None:
+        try:
+            # try to extract a confidence score (e.g., 'Confidence: 0.85' or 'confidence 85%')
+            m = re.search(r'confidence\s*[:\-]?\s*([0-9]*\.?[0-9]+)\s*%?', output, re.I)
+            if m:
+                conf_raw = float(m.group(1))
+                # if confidence appears as percentage (>1), normalize
+                if conf_raw > 1.0:
+                    conf = min(1.0, conf_raw / 100.0)
+                else:
+                    conf = conf_raw
+        except Exception:
+            conf = None
+
+        try:
+            # prefer text labeled after 'Answer:' and before 'Confidence'
+            parts = re.split(r'confidence\s*[:\-]?', output, flags=re.I)
+            first = parts[0]
+            m_ans = re.search(r'answer\s*[:\-]?\s*(.*)', first, re.I | re.S)
+            if m_ans:
+                annotation = m_ans.group(1).strip()
+            else:
+                # fallback: take the first non-empty line (strip any leading 'Answer:')
+                lines = first.strip().splitlines()
+                if lines:
+                    line0 = lines[0]
+                    annotation = re.sub(r'^\s*Answer\s*[:\-]?\s*', '', line0, flags=re.I).strip()
+                    if len(lines) > 1:
+                        # include remaining lines if they look like continuation
+                        rest = '\n'.join([l.strip() for l in lines[1:]]).strip()
+                        if rest:
+                            annotation = annotation + '\n' + rest
+        except Exception:
+            pass
+
+        if conf is None:
             return {"annotation": annotation}
-        else:
-            return {"annotation": annotation, "confidence": conf}
+        return {"annotation": annotation, "confidence": conf}

@@ -10,7 +10,7 @@ from base_structure.base_router import BaseRouter
 
 class KNNRouter(BaseRouter):
     """KNN-based router using historical annotated samples."""
-    def __init__(self, annotator, candidate_llms, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", k: int = 5, device: Optional[str] = None, train_budget: int = 50):
+    def __init__(self, annotator, candidate_llms, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", k: int = 5, device: Optional[str] = None, train_budget: int = 5):
         # annotator and candidate_llms are required for router cold-start
         self.annotator = annotator
         self.candidate_llms = candidate_llms
@@ -33,8 +33,20 @@ class KNNRouter(BaseRouter):
 
     def _encode_texts(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
         all_embs = []
+        total = len(texts)
+        processed = 0
         for i in range(0, len(texts), batch_size):
             batch = texts[i: i + batch_size]
+            processed += len(batch)
+            # progress callback if available
+            try:
+                if hasattr(self, 'progress_cb') and callable(getattr(self, 'progress_cb')):
+                    try:
+                        self.progress_cb(processed, total, {'phase': 'encode'})
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             enc = self.tokenizer(batch, padding=True, truncation=True, return_tensors="pt")
             enc = {k: v.to(self.device) for k, v in enc.items()}
             with torch.no_grad():

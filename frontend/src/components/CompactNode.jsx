@@ -34,13 +34,11 @@ function summaryFromData(data) {
     }
     if (label === 'Annotate' || label === 'Annotator') {
       const task = params.task_class || params.task || '';
-      // Do not display candidate LLMs on the Annotate node summary — only show the task
       return short(task ? task.split('.').pop() : '', 40);
     }
     if (label === 'Output') {
       return short(params.path || params.output || 'out');
     }
-    // default fallback: show a key hint
     const keys = Object.keys(params || {});
     return keys.length ? short(keys.slice(0, 3).join(', ')) : '';
   } catch (e) {
@@ -81,22 +79,9 @@ export default function CompactNode({ id, data }) {
   const candList = isCandidate && data?.params?.candidate_llms ? data.params.candidate_llms : null;
   const bg = typeColor(title);
   const accent = typeAccent(title);
-  const containerStyle = {
-    padding: 8,
-    borderRadius: 6,
-    border: `1px solid ${accent}`,
-    background: bg,
-    minWidth: 140,
-    boxShadow: '0 6px 18px rgba(15,23,42,0.06)',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 6,
-  };
-  const titleStyle = { fontSize: 13, fontWeight: 700, marginBottom: 0, display: 'flex', alignItems: 'center', gap: 8, color: '#0f172a' };
-  const summaryStyle = { fontSize: 12, color: '#334155' };
 
   const icon = (label) => {
-    const stroke = accent;
+    const stroke = 'var(--accent)';
     switch (label) {
       case 'LoadData':
         return (
@@ -120,25 +105,47 @@ export default function CompactNode({ id, data }) {
   };
 
   return (
-    <div style={containerStyle} data-id={id}>
-      <Handle type="target" position={Position.Left} style={{ background: '#555' }} />
-      <div style={titleStyle}>
-        <div style={{ width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{icon(title)}</div>
+    <div className="compact-node p-2 rounded-md min-w-[140px] shadow-sm" data-id={id} style={{ ['--accent']: accent, ['--bg']: bg }}>
+      <Handle type="target" position={Position.Left} className="bg-gray-700" />
+
+      <div className="flex items-center gap-2.5 text-[13px] font-bold mb-0 text-[#0f172a]">
+        <div className="w-[18px] h-[18px] flex items-center justify-center">{icon(title)}</div>
         <div>{title}</div>
       </div>
+
       {isCandidate && Array.isArray(candList) ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div className="flex flex-col gap-1 mt-2">
           {candList.slice(0, 6).map((c, i) => (
-            <div key={i} style={{ fontSize: 11, color: '#333', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c}</div>
+            <div key={i} className="text-[11px] text-[#333] truncate">{c}</div>
           ))}
           {candList.length > 6 ? (
-            <div style={{ fontSize: 11, color: '#777' }}>+{candList.length - 6} more</div>
+            <div className="text-[11px] text-[#777]">+{candList.length - 6} more</div>
           ) : null}
         </div>
       ) : (
-        summary ? <div style={summaryStyle}>{summary}</div> : null
+        <>
+          {summary ? <div className="text-[12px] text-gray-600 mt-2">{summary}</div> : null}
+
+          {(['Filter', 'Router', 'Annotate'].includes(title) && data && data.progress) ? (
+            (() => {
+              const pr = data.progress || {};
+              const curr = pr.current || 0;
+              const total = pr.total || 0;
+              const pct = total > 0 ? Math.min(100, Math.round((curr / total) * 100)) : 0;
+              return (
+                <div className="mt-2">
+                  <div className="h-2 bg-gray-200 rounded overflow-hidden">
+                    <div className="h-full bg-[var(--accent)]" style={{ width: `${pct}%` }} />
+                  </div>
+                  <div className="text-[11px] text-gray-500 mt-1">{curr}/{total} ({pct}%)</div>
+                </div>
+              );
+            })()
+          ) : null}
+        </>
       )}
-      <Handle type="source" position={Position.Right} style={{ background: '#555' }} />
+
+      <Handle type="source" position={Position.Right} className="bg-gray-700" />
     </div>
   );
 }

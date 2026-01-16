@@ -1,6 +1,9 @@
 import json
+import logging
 from typing import List, Dict, Any
 from misc.metrics import compute_bleu, compute_rouge
+
+logger = logging.getLogger(__name__)
 
 
 def compute_metrics_for_annotations(auto_results: List[Dict[str, Any]], raw_data: List[Dict[str, Any]]):
@@ -33,8 +36,8 @@ def compute_metrics_for_annotations(auto_results: List[Dict[str, Any]], raw_data
     avg_rouge_1 = sum(rouge_1) / total if total > 0 else 0.0
     avg_rouge_2 = sum(rouge_2) / total if total > 0 else 0.0
     avg_rouge_l = sum(rouge_l) / total if total > 0 else 0.0
-    print(f"自动标注 BLEU-4: {avg_bleu:.4f}")
-    print(f"自动标注 ROUGE-1: {avg_rouge_1:.4f}  ROUGE-2: {avg_rouge_2:.4f}  ROUGE-L: {avg_rouge_l:.4f}  (共{total}条)")
+    logger.info("自动标注 BLEU-4: %.4f", avg_bleu)
+    logger.info("自动标注 ROUGE-1: %.4f  ROUGE-2: %.4f  ROUGE-L: %.4f  (共%d条)", avg_rouge_1, avg_rouge_2, avg_rouge_l, total)
 
 
 def export_annotation_results(results: List[Dict[str, Any]], raw_data: List[Dict[str, Any]], output_path: str = "final_annotation_results.json"):
@@ -58,4 +61,4 @@ def export_annotation_results(results: List[Dict[str, Any]], raw_data: List[Dict
         })
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(export_data, f, ensure_ascii=False, indent=2)
-    print(f"已导出到 {output_path}")
+    logger.info("已导出到 %s", output_path)

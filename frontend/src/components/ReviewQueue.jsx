@@ -74,67 +74,74 @@ export default function ReviewQueue({ items, onUpdate, onRefresh }) {
   const runOnlyCount = list.length - serverCount;
 
   if (!list || list.length === 0) return (
-    <div style={{ marginTop: 12 }}>
-      <h4 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Review Queue <button className="btn btn-secondary" onClick={onRefresh}>Refresh</button></h4>
-      <div style={{ color: '#666' }}>No items requiring human review.</div>
+    <div className="mt-3">
+      <div className="flex items-center gap-3">
+        <h4 className="text-sm font-semibold">Remaining</h4>
+        <button className="btn btn-ghost text-sm" onClick={onRefresh} disabled={!onRefresh}>Refresh</button>
+      </div>
+      <div className="text-sm text-slate-500 mt-2">No items requiring human review.</div>
     </div>
   );
 
   return (
-    <div style={{ marginTop: 12 }}>
-      <h4>Review Queue ({list.length})</h4>
-      <div style={{ display: 'flex', gap: 12 }}>
-        <div style={{ width: 160, maxHeight: 420, overflow: 'auto', borderRight: '1px solid #eee' }}>
-          {list.map((it, i) => (
-            <div key={i} style={{ padding: 8, background: i === sel ? '#f3f4f6' : 'transparent', display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input type="checkbox" checked={selectedSet.has(i)} onChange={() => toggleSelect(i)} />
-              <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => setSel(i)}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{it.id || it.qid || `item ${i}`}</div>
-                  {it._server ? (
-                    <div style={{ fontSize: 11, background: '#e6fffb', color: '#065f46', padding: '2px 6px', borderRadius: 10 }}>server</div>
-                  ) : (
-                    <div style={{ fontSize: 11, background: '#fff7ed', color: '#7c2d12', padding: '2px 6px', borderRadius: 10 }}>run-only</div>
-                  )}
+    <div className="mt-3">
+      <div className="flex items-start gap-4">
+        <div className="min-w-[180px] max-w-[260px] max-h-[420px] overflow-auto border-r border-slate-100 pr-2">
+          <div className="flex gap-2 mb-2 items-center">
+            <button className="btn btn-ghost text-sm" onClick={selectAll}>Select All</button>
+            <button className="btn btn-ghost text-sm" onClick={clearSelection}>Clear</button>
+            <div className="ml-auto text-sm text-slate-500">{list.length} items</div>
+          </div>
+          <div className="space-y-2">
+            {list.map((it, i) => (
+              <div key={i} className={`p-2 ${i === sel ? 'bg-slate-100' : ''} flex gap-2 items-start rounded`}>
+                <input type="checkbox" checked={selectedSet.has(i)} onChange={() => toggleSelect(i)} />
+                <div className="flex-1 cursor-pointer" onClick={() => setSel(i)}>
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm font-semibold">{it.id || it.qid || `item ${i}`}</div>
+                    {it._server ? (
+                      <div className="text-xs bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">server</div>
+                    ) : (
+                      <div className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">run-only</div>
+                    )}
+                  </div>
+                  <div className="text-sm text-slate-500">{(it.annotation || '').toString().slice(0, 80)}</div>
                 </div>
-                <div style={{ fontSize: 12, color: '#666' }}>{(it.annotation || '').toString().slice(0, 80)}</div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
 
-        <div style={{ flex: 1 }}>
-          <div style={{ marginBottom: 8 }}>
-            <strong>Selected</strong>
-            <div style={{ fontSize: 13, color: '#333', marginTop: 6 }}>{cur && (cur.question || cur.q || cur.text || JSON.stringify(cur).slice(0,200))}</div>
+        <div className="flex-1">
+          <div className="mb-2">
+            <strong className="text-sm">Selected</strong>
+            <div className="text-sm text-slate-700 mt-2">{cur && (cur.question || cur.q || cur.text || JSON.stringify(cur).slice(0,200))}</div>
           </div>
 
-          <div style={{ marginTop: 8 }}>
-            <label>Annotation</label>
-            <input value={cur?.annotation || ''} onChange={(e) => handleChange('annotation', e.target.value)} style={{ width: '100%' }} />
+          <div className="mt-3">
+            <label className="block text-sm mb-1">Annotation</label>
+            <input className="w-full border border-slate-100 rounded px-2 py-1" value={cur?.annotation || ''} onChange={(e) => handleChange('annotation', e.target.value)} />
           </div>
 
-          <div style={{ marginTop: 8 }}>
-            <label>Confidence</label>
-            <input type="number" step="0.01" min="0" max="1" value={cur?.confidence || 0} onChange={(e) => handleChange('confidence', Number(e.target.value) || 0)} style={{ width: 120 }} />
+          <div className="mt-3">
+            <label className="block text-sm mb-1">Confidence</label>
+            <input type="number" step="0.01" min="0" max="1" value={cur?.confidence || 0} onChange={(e) => handleChange('confidence', Number(e.target.value) || 0)} className="w-28 border border-slate-100 rounded px-2 py-1" />
           </div>
 
-          <div style={{ marginTop: 8 }}>
-            <label>Notes (optional)</label>
-            <textarea value={cur?.notes || ''} onChange={(e) => handleChange('notes', e.target.value)} rows={4} style={{ width: '100%' }} />
+          <div className="mt-3">
+            <label className="block text-sm mb-1">Notes (optional)</label>
+            <textarea rows={4} className="w-full border border-slate-100 rounded px-2 py-1" value={cur?.notes || ''} onChange={(e) => handleChange('notes', e.target.value)} />
           </div>
 
-          <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+          <div className="mt-4 flex items-center gap-2">
             <button className="btn btn-primary" onClick={() => submitAction('update')}>Save</button>
             <button className="btn btn-primary" onClick={() => submitAction('approve')}>Approve</button>
-            <button className="btn btn-secondary" onClick={() => submitAction('reject')}>Reject</button>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            <button className="btn btn-ghost" onClick={() => submitAction('reject')}>Reject</button>
+            <div className="ml-auto flex gap-2">
               <button className="btn btn-primary" onClick={() => submitBulk('approve')} disabled={selectedSet.size === 0}>Bulk Approve</button>
-              <button className="btn btn-secondary" onClick={() => submitBulk('reject')} disabled={selectedSet.size === 0}>Bulk Reject</button>
+              <button className="btn btn-ghost" onClick={() => submitBulk('reject')} disabled={selectedSet.size === 0}>Bulk Reject</button>
             </div>
-            <div style={{ marginLeft: '12px' }}>
-              <span style={{ fontSize: 12, color: '#666' }}>Server: {serverCount} · Run-only: {runOnlyCount}</span>
-            </div>
+            <div className="ml-3 text-sm text-slate-500">Server: {serverCount} · Run-only: {runOnlyCount}</div>
           </div>
         </div>
       </div>
