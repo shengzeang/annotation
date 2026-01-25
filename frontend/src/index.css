@@ -2,12 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Custom base tweaks */
+/* Custom base tweaks (Gradio-like tokens) */
 :root{
-  --app-bg: #f7f9fc;
+  --app-bg: #f5f7fa;
   --card: #ffffff;
   --muted: #6b7280;
-  --accent: #2563eb;
+  --accent: linear-gradient(90deg,#7c3aed 0%,#06b6d4 100%);
+  --accent-solid: #7c3aed;
+  --radius: 14px;
+  --panel-shadow: 0 8px 30px rgba(2,6,23,0.06);
 }
 
 html,body,#root{height:100%;}
@@ -15,25 +18,33 @@ body{@apply bg-[var(--app-bg)] text-slate-900 font-sans}
 
 /* Example component utilities using Tailwind classes for convenience */
 .app-shell{@apply min-h-screen flex gap-4}
-.sidebar{@apply w-56 p-4 bg-white border border-slate-100 rounded-xl}
+.sidebar{@apply w-60 p-4 bg-white rounded-[var(--radius)] shadow-[var(--panel-shadow)]}
 .canvas-wrap{@apply flex-1 flex flex-col}
 .canvas-topbar{@apply flex items-center justify-between p-3}
 .right-panel{@apply w-96 p-4}
-.card{@apply bg-white rounded-xl border border-slate-100 p-3}
-.btn{@apply inline-flex items-center gap-2 px-3 py-2 rounded-md font-semibold}
-.btn-primary{@apply bg-accent text-white}
-.btn-ghost{@apply bg-transparent text-slate-900 border border-slate-100}
+.card{@apply bg-[var(--card)] rounded-[var(--radius)] p-4 shadow-[var(--panel-shadow)]}
+.btn{@apply inline-flex items-center gap-2 px-4 py-2 rounded-full font-semibold}
+.btn-primary{
+  @apply text-white;
+  background: var(--accent);
+  background-size: 200% 200%;
+  border: none;
+  box-shadow: 0 10px 30px rgba(124,58,237,0.12);
+  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+}
+.btn-primary:hover{ transform: translateY(-1px) scale(1.02); filter: brightness(1.04); box-shadow: 0 12px 36px rgba(124,58,237,0.16) }
+.btn-ghost{@apply bg-transparent text-slate-900}
 
 /* Compact node styling using CSS variables for dynamic colors */
 .compact-node{
-  padding: 8px;
-  border-radius: 6px;
+  padding: 10px;
+  border-radius: 10px;
   min-width: 140px;
-  box-shadow: 0 6px 18px rgba(15,23,42,0.06);
+  box-shadow: 0 6px 20px rgba(2,6,23,0.06);
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  border: 1px solid var(--accent, #999);
+  gap: 8px;
+  border: 1px solid rgba(15,23,42,0.04);
   background: var(--bg, #fff);
 }
 .compact-node .title{font-size:13px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:8px}

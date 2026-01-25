@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import Button from './ui/Button';
+import Card from './ui/Card';
 
 export default function ReviewQueue({ items, onUpdate, onRefresh }) {
   const [list, setList] = useState(items || []);
@@ -74,13 +76,13 @@ export default function ReviewQueue({ items, onUpdate, onRefresh }) {
   const runOnlyCount = list.length - serverCount;
 
   if (!list || list.length === 0) return (
-    <div className="mt-3">
+    <Card className="mt-3">
       <div className="flex items-center gap-3">
         <h4 className="text-sm font-semibold">Remaining</h4>
-        <button className="btn btn-ghost text-sm" onClick={onRefresh} disabled={!onRefresh}>Refresh</button>
+        <Button variant="ghost" className="text-sm" onClick={onRefresh} disabled={!onRefresh}>Refresh</Button>
       </div>
       <div className="text-sm text-slate-500 mt-2">No items requiring human review.</div>
-    </div>
+    </Card>
   );
 
   return (
@@ -88,8 +90,8 @@ export default function ReviewQueue({ items, onUpdate, onRefresh }) {
       <div className="flex items-start gap-4">
         <div className="min-w-[180px] max-w-[260px] max-h-[420px] overflow-auto border-r border-slate-100 pr-2">
           <div className="flex gap-2 mb-2 items-center">
-            <button className="btn btn-ghost text-sm" onClick={selectAll}>Select All</button>
-            <button className="btn btn-ghost text-sm" onClick={clearSelection}>Clear</button>
+            <Button variant="ghost" className="text-sm" onClick={selectAll}>Select All</Button>
+            <Button variant="ghost" className="text-sm" onClick={clearSelection}>Clear</Button>
             <div className="ml-auto text-sm text-slate-500">{list.length} items</div>
           </div>
           <div className="space-y-2">
@@ -134,12 +136,12 @@ export default function ReviewQueue({ items, onUpdate, onRefresh }) {
           </div>
 
           <div className="mt-4 flex items-center gap-2">
-            <button className="btn btn-primary" onClick={() => submitAction('update')}>Save</button>
-            <button className="btn btn-primary" onClick={() => submitAction('approve')}>Approve</button>
-            <button className="btn btn-ghost" onClick={() => submitAction('reject')}>Reject</button>
+            <Button variant="primary" onClick={() => submitAction('update')}>Save</Button>
+            <Button variant="primary" onClick={() => submitAction('approve')}>Approve</Button>
+            <Button variant="ghost" onClick={() => submitAction('reject')}>Reject</Button>
             <div className="ml-auto flex gap-2">
-              <button className="btn btn-primary" onClick={() => submitBulk('approve')} disabled={selectedSet.size === 0}>Bulk Approve</button>
-              <button className="btn btn-ghost" onClick={() => submitBulk('reject')} disabled={selectedSet.size === 0}>Bulk Reject</button>
+              <Button variant="primary" onClick={() => submitBulk('approve')} disabled={selectedSet.size === 0}>Bulk Approve</Button>
+              <Button variant="ghost" onClick={() => submitBulk('reject')} disabled={selectedSet.size === 0}>Bulk Reject</Button>
             </div>
             <div className="ml-3 text-sm text-slate-500">Server: {serverCount} · Run-only: {runOnlyCount}</div>
           </div>

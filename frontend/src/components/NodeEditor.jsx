@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import Button from './ui/Button';
+import Card from './ui/Card';
 
 function JsonEditor({ value, onChange, rows = 6 }) {
   const [txt, setTxt] = useState(() => JSON.stringify(value || {}, null, 2));
@@ -260,7 +262,7 @@ export default function NodeEditor({ node, updateNodeData, deleteNode, openConfi
   );
 
   return (
-    <div className="node-editor card">
+    <Card className="node-editor">
       {globalDatalists}
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold">Node</h3>
@@ -270,10 +272,10 @@ export default function NodeEditor({ node, updateNodeData, deleteNode, openConfi
       <div className="mt-3">{renderForm()}</div>
 
       <div className="flex justify-end items-center gap-3 mt-4">
-        <button className="btn btn-ghost" onClick={() => { setParams(node.data?.params || {}); }}>Reset</button>
-        <button className="btn btn-ghost text-red-600 border-red-100" onClick={() => { openConfirm ? openConfirm(node.id, `Delete node "${node.data?.label || node.id}"?`) : (deleteNode && deleteNode(node.id)); }}>Delete</button>
-        <button className="btn btn-primary" onClick={handleSave}>Save</button>
+        <Button variant="ghost" onClick={() => { setParams(node.data?.params || {}); }}>Reset</Button>
+        <Button variant="ghost" danger onClick={() => { openConfirm ? openConfirm(node.id, `Delete node \"${node.data?.label || node.id}\"?`) : (deleteNode && deleteNode(node.id)); }}>Delete</Button>
+        <Button variant="primary" onClick={handleSave}>Save</Button>
       </div>
-    </div>
+    </Card>
   );
 }

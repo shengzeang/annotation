@@ -1,5 +1,7 @@
 import React from 'react';
 import { v4 as uuidv4 } from 'uuid';
+import Button from './ui/Button';
+import Card from './ui/Card';
 
 const Svg = ({ children, size = 18 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -30,14 +32,14 @@ export default function Sidebar({ setNodes, nodes }) {
   };
 
   return (
-    <aside className="sidebar">
+    <Card className="sidebar">
       <h3 className="text-sm font-semibold text-slate-700">Palette</h3>
       <div className="mt-3 space-y-2">
         {nodeTypes.map((n) => (
-          <div key={n.type} className="node-item flex items-center" onClick={() => handleAdd(n.type)}>
+          <Button as="div" key={n.type} className="node-item flex items-center w-full justify-start" variant="ghost" onClick={() => handleAdd(n.type)}>
             <div className="text-lg mr-2">{n.icon}</div>
             <div className="flex-1 text-sm text-slate-900">{n.label}</div>
-          </div>
+          </Button>
         ))}
       </div>
       <hr className="my-3 border-slate-100" />
@@ -48,6 +50,6 @@ export default function Sidebar({ setNodes, nodes }) {
         <div>- Connect edges to form flow</div>
         <div>- Click Run Graph to execute</div>
       </div>
-    </aside>
+    </Card>
   );
 }

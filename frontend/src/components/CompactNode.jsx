@@ -1,5 +1,6 @@
 import React from 'react';
 import { Handle, Position } from 'reactflow';
+import Card from './ui/Card';
 
 function short(s, n = 36) {
   if (!s && s !== 0) return '';
@@ -105,8 +106,8 @@ export default function CompactNode({ id, data }) {
   };
 
   return (
-    <div className="compact-node p-2 rounded-md min-w-[140px] shadow-sm" data-id={id} style={{ ['--accent']: accent, ['--bg']: bg }}>
-      <Handle type="target" position={Position.Left} className="bg-gray-700" />
+    <Card className="compact-node p-2 min-w-[140px] shadow-sm hover:shadow-md transition-transform" data-id={id} style={{ ['--accent']: accent, ['--accent-solid']: accent, ['--bg']: bg }}>
+      <Handle type="target" position={Position.Left} className="bg-gray-300" />
 
       <div className="flex items-center gap-2.5 text-[13px] font-bold mb-0 text-[#0f172a]">
         <div className="w-[18px] h-[18px] flex items-center justify-center">{icon(title)}</div>
@@ -134,11 +135,11 @@ export default function CompactNode({ id, data }) {
               const pct = total > 0 ? Math.min(100, Math.round((curr / total) * 100)) : 0;
               return (
                 <div className="mt-2">
-                  <div className="h-2 bg-gray-200 rounded overflow-hidden">
-                    <div className="h-full bg-[var(--accent)]" style={{ width: `${pct}%` }} />
-                  </div>
-                  <div className="text-[11px] text-gray-500 mt-1">{curr}/{total} ({pct}%)</div>
-                </div>
+                        <div className="h-2 bg-gray-200 rounded overflow-hidden">
+                          <div className="h-full" style={{ width: `${pct}%`, background: 'var(--accent-solid)' }} />
+                        </div>
+                        <div className="text-[11px] text-gray-500 mt-1">{curr}/{total} ({pct}%)</div>
+                      </div>
               );
             })()
           ) : null}
@@ -146,6 +147,6 @@ export default function CompactNode({ id, data }) {
       )}
 
       <Handle type="source" position={Position.Right} className="bg-gray-700" />
-    </div>
+    </Card>
   );
 }

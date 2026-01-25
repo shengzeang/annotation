@@ -15,6 +15,8 @@ import CompactNode from './components/CompactNode';
 import NodeEditor from './components/NodeEditor';
 import ConfirmModal from './components/ConfirmModal';
 import ReviewQueue from './components/ReviewQueue';
+import Button from './components/ui/Button';
+import Card from './components/ui/Card';
 import axios from 'axios';
 import { PlayIcon, TrashIcon, PencilSquareIcon, DocumentTextIcon } from '@heroicons/react/24/solid';
 
@@ -459,7 +461,7 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-row">
-      <div className="w-52 p-3">
+      <div className="w-[260px] p-3">
         <Sidebar setNodes={setNodes} setEdges={setEdges} nodes={nodes} />
       </div>
 
@@ -470,45 +472,27 @@ export default function App() {
               <div className="h-[60vh] min-h-[360px] border-b border-gray-200 relative">
                 <div className="absolute top-[10px] right-[12px] z-50">
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleRun}
-                      title="Run the current graph"
-                      className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-3 py-1.5 rounded"
-                    >
+                    <Button variant="primary" onClick={handleRun} title="Run the current graph" className="inline-flex items-center gap-2 px-3 py-1.5">
                       <PlayIcon className="w-4 h-4" />
                       <span>Run Graph</span>
-                    </button>
+                    </Button>
 
-                    <button
-                      onClick={compactLayout}
-                      title="Rearrange nodes compactly"
-                      className="inline-flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-800 text-sm font-medium px-3 py-1.5 rounded"
-                    >
+                    <Button variant="ghost" onClick={compactLayout} title="Rearrange nodes compactly" className="inline-flex items-center gap-2 px-3 py-1.5">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-gray-700">
                         <path d="M12 4v16" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
                       </svg>
                       <span>Compact</span>
-                    </button>
+                    </Button>
 
-                    <button
-                      onClick={handleUndo}
-                      disabled={!(prevNodes || (undoStack && undoStack.length > 0))}
-                      title="Undo last action (deletes or layout)"
-                      className={`inline-flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded ${!(prevNodes || (undoStack && undoStack.length > 0)) ? 'bg-gray-100 text-gray-400 cursor-not-allowed opacity-60' : 'bg-gray-100 hover:bg-gray-200 text-gray-800'}`}
-                    >
+                    <Button variant="ghost" onClick={handleUndo} disabled={!(prevNodes || (undoStack && undoStack.length > 0))} title="Undo last action (deletes or layout)" className={`inline-flex items-center gap-2 px-3 py-1.5 ${!(prevNodes || (undoStack && undoStack.length > 0)) ? 'cursor-not-allowed opacity-60' : ''}`}>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M21 7v6h-6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M3 17a9 9 0 0115.9-6.36L21 11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       <span>Undo</span>
-                    </button>
+                    </Button>
 
-                    <button
-                      onClick={deleteSelected}
-                      disabled={!selectedNode}
-                      title="Delete selected node"
-                      className={`inline-flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded ${!selectedNode ? 'bg-red-200 text-red-400 cursor-not-allowed opacity-60' : 'bg-red-600 hover:bg-red-700 text-white'}`}
-                    >
+                    <Button variant="primary" onClick={deleteSelected} disabled={!selectedNode} title="Delete selected node" className={`${!selectedNode ? 'cursor-not-allowed opacity-60 bg-red-200 text-red-400' : 'bg-red-600 hover:bg-red-700 text-white'} inline-flex items-center gap-2 px-3 py-1.5`}>
                       <TrashIcon className="w-4 h-4" />
                       <span>Delete</span>
-                    </button>
+                    </Button>
                   </div>
                 </div>
 
@@ -539,21 +523,15 @@ export default function App() {
             </div>
             <div className="w-[360px] border-l border-gray-200 p-3 bg-white rounded flex flex-col">
               <div className="flex gap-2 mb-3">
-                <button
-                  onClick={() => setRightView('node')}
-                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded ${rightView === 'node' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800'}`}
-                >
+                <Button variant={rightView === 'node' ? 'primary' : 'ghost'} onClick={() => setRightView('node')} className="inline-flex items-center gap-2 px-2 py-0.5 text-sm">
                   <PencilSquareIcon className="w-4 h-4" />
                   <span>Node Editor</span>
-                </button>
+                </Button>
 
-                <button
-                  onClick={() => setRightView('results')}
-                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded ${rightView === 'results' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800'}`}
-                >
+                <Button variant={rightView === 'results' ? 'primary' : 'ghost'} onClick={() => setRightView('results')} className="inline-flex items-center gap-2 px-2 py-0.5 text-sm">
                   <DocumentTextIcon className="w-4 h-4" />
                   <span>Annotation Results</span>
-                </button>
+                </Button>
               </div>
 
               <div className="flex-1 overflow-auto">
@@ -574,8 +552,7 @@ export default function App() {
                   <div>
                       <div className="flex justify-between items-center mt-0 mb-3">
                         <span className="text-lg font-semibold">Annotation Results</span>
-                        <button
-                        onClick={() => {
+                        <Button variant="ghost" onClick={() => {
                           try {
                             const blob = new Blob([JSON.stringify({ run_id: latestRunId, outputs: runResults }, null, 2)], { type: 'application/json' });
                             const url = URL.createObjectURL(blob);
@@ -587,12 +564,10 @@ export default function App() {
                             a.remove();
                             URL.revokeObjectURL(url);
                           } catch (e) { console.error('download failed', e); }
-                        }}
-                        className="inline-flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-800 text-sm font-medium px-3 py-1 rounded"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 3v12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/><path d="M8 11l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                        <span>Download JSON</span>
-                      </button>
+                        }} className="inline-flex items-center gap-2 px-3 py-1">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 3v12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/><path d="M8 11l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                          <span>Download JSON</span>
+                        </Button>
                     </div>
 
                     {(!displayResults || Object.keys(displayResults).length === 0) && (<div>No outputs</div>)}
