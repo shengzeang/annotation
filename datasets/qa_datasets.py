@@ -15,6 +15,8 @@ import json
 import os
 import urllib.request
 from typing import Any, Dict, Iterable, List, Optional
+import re
+import gzip
 
 from base_structure.dataset import Dataset
 
@@ -131,11 +133,37 @@ class HotpotDataset(CommonQADataset):
     def from_file(cls, path: str = "hotpot_train_v1.json", max_samples: int = 200, shuffle_seed: Optional[int] = None) -> "HotpotDataset":
         return super().from_file(path=path, max_samples=max_samples, shuffle_seed=shuffle_seed)
 
+    @classmethod
+    def from_url(
+        cls,
+        url: str = "http://curtis.ml.cmu.edu/datasets/hotpot/hotpot_train_v1.1.json",
+        save_path: str = "hotpot_train_v1.json",
+        overwrite: bool = False,
+        **kwargs,
+    ) -> "HotpotDataset":
+        if not overwrite and os.path.exists(save_path):
+            return cls.from_file(save_path, **kwargs)
+        urllib.request.urlretrieve(url, save_path)
+        return cls.from_file(save_path, **kwargs)
+
 
 class TriviaQADataset(CommonQADataset):
     @classmethod
     def from_file(cls, path: str = "triviaqa_train.json", max_samples: int = 200, shuffle_seed: Optional[int] = None) -> "TriviaQADataset":
         return super().from_file(path=path, max_samples=max_samples, shuffle_seed=shuffle_seed)
+
+    @classmethod
+    def from_url(
+        cls,
+        url: str = "https://raw.githubusercontent.com/mandarjoshi90/triviaqa/master/samples/triviaqa_sample.json",
+        save_path: str = "triviaqa_train.json",
+        overwrite: bool = False,
+        **kwargs,
+    ) -> "TriviaQADataset":
+        if not overwrite and os.path.exists(save_path):
+            return cls.from_file(save_path, **kwargs)
+        urllib.request.urlretrieve(url, save_path)
+        return cls.from_file(save_path, **kwargs)
 
 
 class NQDataset(CommonQADataset):
@@ -143,6 +171,46 @@ class NQDataset(CommonQADataset):
     def from_file(cls, path: str = "nq_train.json", max_samples: int = 200, shuffle_seed: Optional[int] = None) -> "NQDataset":
         return super().from_file(path=path, max_samples=max_samples, shuffle_seed=shuffle_seed)
 
+    @classmethod
+    def from_url(
+        cls,
+        url: str = "https://storage.googleapis.com/natural_questions/v1.0-simplified/simplified-nq-train.jsonl.gz",
+        save_path: str = "nq_train.json",
+        overwrite: bool = False,
+        max_samples: Optional[int] = 200,
+        **kwargs,
+    ) -> "NQDataset":
+        # If the target json already exists and overwrite is False, use it.
+        if not overwrite and os.path.exists(save_path):
+            return cls.from_file(save_path, max_samples=max_samples, **kwargs)
+
+        # Download the gzipped jsonl and convert to a JSON list limited by max_samples
+        tmp_gz = save_path + ".jsonl.gz"
+        urllib.request.urlretrieve(url, tmp_gz)
+
+        records: List[Dict[str, Any]] = []
+        with gzip.open(tmp_gz, "rt", encoding="utf-8") as fh:
+            for i, line in enumerate(fh):
+                if max_samples is not None and i >= max_samples:
+                    break
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                records.append(obj)
+
+        # Write out a JSON list file that CommonQADataset.from_file can consume
+        with open(save_path, "w", encoding="utf-8") as out:
+            json.dump(records, out, ensure_ascii=False)
+
+        # remove temporary gz
+        try:
+            os.remove(tmp_gz)
+        except Exception:
+            pass
+
+        return cls.from_file(save_path, max_samples=max_samples, **kwargs)
+    
 
 class SquadDataset(CommonQADataset):
     """SQuAD v1.1 specific parser implemented as a thin subclass of CommonQADataset.
