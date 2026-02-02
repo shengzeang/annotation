@@ -13,7 +13,7 @@ class RouterDCRouter(BaseRouter):
     Router-DC-style
     
     For each LLM, compute a "model identity vector" from our_anno.json
-    During inference, encode the query and pick the most similar LLM.(comparing the query embdding with the model embedding)
+    During inference, encode the query and pick the most similar LLM.(comparing the query embedding with the model embedding)
     """
 
     def __init__(self, candidate_llms: List[str], encoder_name: str ="sentence-transformers/all-MiniLM-L6-v2", device: str =None, epochs: int =10, lr: float =0.01, ann_path: Optional[str] = None):
@@ -43,8 +43,8 @@ class RouterDCRouter(BaseRouter):
         self.ready = False
         return True
 
-    #text embeddings from annotation(same as mlprouter)
     def _encode_texts(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
+        """Converts texts into vector embeddings using pooled output or masked mean pooling."""
         all_embs = []
         for i in range(0, len(texts), batch_size):
             batch = texts[i: i + batch_size]
@@ -66,7 +66,7 @@ class RouterDCRouter(BaseRouter):
             all_embs.append(emb.cpu().numpy())
         return np.vstack(all_embs)
 
-    #method 2: using sample-LLM constrastve loss (as per RouterDC) to generate model/identity vectors
+    #Using sample-LLM constrastve loss (as per RouterDC) to generate model/identity vectors
     def build_from_annotations(self, out_dir: str):
         with open(self.ann_path) as f:
             data = json.load(f)

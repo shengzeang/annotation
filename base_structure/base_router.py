@@ -9,7 +9,8 @@ from scripts.select_best_route import select_best
 
 
 class BaseRouter(ABC):
-    """Abstract router interface for scoring candidate LLMs."""
+    """Abstract router interface for scoring candidate LLMs.
+       Decoupled from specific tasks or datasets with cold-start training mechanism. """
     @property
     def if_train(self):
         """Whether this router requires training."""

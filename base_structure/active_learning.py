@@ -1,9 +1,8 @@
-# 任务抽象接口（预留，便于未来多任务扩展）
+# Task abstraction interface (reserved for future multi-task extensions)
+"""Active learning module and sampling strategies.
+Allows different text representations and sampling strategies.
+"""
 from base_structure.base_task import Task
-# ==============================
-# Active Learning 模块
-# ==============================
-
 import numpy as np
 from typing import List, Sequence
 from abc import ABC, abstractmethod
@@ -43,22 +42,23 @@ def _safe_kmeans_fit(X, n_clusters, mb_batch, use_mini=True, timeout=10.0):
 
 
 class DataPool:
-    """数据池, 包含文本和对应ID"""
+    """Data pool containing text samples and corresponding IDs"""
     def __init__(self, texts: List[str], ids: List[str]):
         self.texts = texts
         self.ids = ids
 
 
 class Embeddings(ABC):
-    """嵌入器基类：文本转向量接口"""
+    """Base class for embedding conversion"""
     @abstractmethod
     def encode(self, texts: Sequence[str]) -> np.ndarray:
-        """返回 shape=[N, D] 的向量"""
+        """return shape=[N, D] vector"""
         return NotImplementedError
 
 
 class Selector(ABC):
-    """主动学习采样器基类，需实现 select_indices"""
+    """Base class for active learning samplers. Subclasses must implement select_indices. 
+    Fall-back to simple selection in subclass."""
     def __init__(self, emb: Embeddings, budget: int, batch_size: int = 32, seed: int = 42, force_fallback: bool = False):
         self.emb = emb
         self.budget = budget
@@ -68,7 +68,7 @@ class Selector(ABC):
         self.force_fallback = force_fallback
 
     def run(self, unlabeled: DataPool, labeled_ids: List[str] = None) -> List[str]:
-        """给定未标注池和已标注ID, 返回采样ID列表"""
+        """Given unlabeled pool(and already labeled IDs) return selected sample ID list."""
         picked: List[str] = []
         labeled_ids = set(labeled_ids or [])
         import time
@@ -105,12 +105,12 @@ class Selector(ABC):
 
     @abstractmethod
     def select_indices(self, X_remain: np.ndarray, picked_ids: List[str], all_X: np.ndarray, all_ids: np.ndarray) -> np.ndarray:
-        """返回未标注池的采样顺序索引，越靠前越优"""
+        """Return indices according to selection priority."""
         return NotImplementedError
 
 
 class BertEmbeddings(Embeddings):
-    """BERT向量嵌入"""
+    """BERT text embedding"""
     def __init__(self, model_name="bert-base-uncased", device=None):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModel.from_pretrained(model_name)
@@ -130,7 +130,8 @@ class BertEmbeddings(Embeddings):
 
 
 class BertKM(Selector):
-    """BERT+KMeans采样器"""
+    """BERT + KMean sampling strategy.
+    Selects closet samples to each of K cluster centres. """
     def __init__(self, emb: Embeddings, budget: int, batch_size: int = 32, k_factor: float = 1.0):
         super().__init__(emb, budget, batch_size)
         self.k_factor = k_factor
@@ -159,7 +160,7 @@ class BertKM(Selector):
 
 
 class SurprisalEmbeddings(Embeddings):
-    """基于MLM困惑度的Surprisal嵌入"""
+    """MLM surprisal embeddings"""
     def __init__(self, model_name: str = "bert-base-uncased",
                  max_length: int = 128,
                  batch_size: int = 32,
@@ -193,6 +194,7 @@ class SurprisalEmbeddings(Embeddings):
         return {k: v.to(self.device) for k, v in enc.items()}
 
     def _random_15pct_mask_positions(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Randomly mask 15% of tokens"""
         B, L = input_ids.shape
         mask = torch.zeros_like(input_ids, dtype=torch.bool)
         special = []
@@ -216,6 +218,7 @@ class SurprisalEmbeddings(Embeddings):
 
     @torch.no_grad()
     def _get_token_losses(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """Computes per token cross entropy loss"""
         B, L = input_ids.shape
         if self.no_mask_eval_15pct:
             labels = input_ids.clone()
@@ -236,6 +239,7 @@ class SurprisalEmbeddings(Embeddings):
         return loss
 
     def _mlm_mask_inputs(self, input_ids: torch.Tensor):
+        """Standard MLM masking"""
         labels = input_ids.clone()
         prob = torch.full_like(input_ids, fill_value=self.mlm_probability, dtype=torch.float32)
         special = []
@@ -269,6 +273,7 @@ class SurprisalEmbeddings(Embeddings):
         return h
 
     def encode(self, texts: Sequence[str]) -> np.ndarray:
+        """main function that converts list of texts into embeddings"""
         import logging, time
         logger = logging.getLogger(__name__)
         self.model.eval()
@@ -292,7 +297,9 @@ class SurprisalEmbeddings(Embeddings):
 
 
 class ALPS(Selector):
-    """ALPS采样器"""
+    """ALPS Selector.
+    Ensures exact number of unique samples by supplementing
+    cluser representatives with random picks when duplicates occur."""
     def select_indices(self, X_remain, picked_ids, all_X, all_ids):
         # fast-path: when batch_size <= 1, no clustering needed
         if self.batch_size <= 1:

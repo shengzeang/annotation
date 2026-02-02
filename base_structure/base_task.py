@@ -1,16 +1,22 @@
+"""
+Abstraction for annotation tasks.
+
+Defines the base interface for annotation operations.
+Includes abstract methods of generating LLMs prompts and parsing responses.
+"""
 from abc import ABC, abstractmethod
 from typing import Dict, Any
 
 
 class Task(ABC):
-    """任务类型抽象基类"""
+    """Abstract base class for annotation tasks"""
     @abstractmethod
-    #生成发送给LLM的prompt
+    #Generate LLM input
     def get_prompt(self, sample: Dict[str, Any], rag_examples=None) -> str:
-        """根据样本和可选RAG检索结果生成prompt"""
+        """Generate prompt based on sample and optional RAG retrieval"""
         pass
-    #解析LLM的返回结果
+    #Parse LLM output
     @abstractmethod
     def parse_output(self, output: str) -> Dict[str, Any]:
-        """解析LLM输出, 返回结构化标注结果"""
+        """Parse LLM output and return structured annotation result"""
         pass

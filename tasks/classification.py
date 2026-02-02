@@ -5,7 +5,7 @@ from base_structure.base_task import Task
 
 
 class ClassificationTask(Task):
-    """分类任务实现"""
+    """Classification of texts into predefined categories"""
     def get_prompt(self, sample: Dict[str, Any], rag_examples=None) -> str:
         rag_str = ""
         if rag_examples:

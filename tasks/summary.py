@@ -5,7 +5,7 @@ from base_structure.base_task import Task
 
 
 class TextSummarization(Task):
-    """文本摘要任务实现"""
+    """Text summary within predefined length."""
     def __init__(self, max_len=150):
         self.summary_type = "extractive"  # or "abstractive"
         self.max_len = max_len

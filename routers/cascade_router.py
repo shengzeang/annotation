@@ -7,6 +7,7 @@ class CascadeRouter(BaseRouter):
     """
     FrugalGPT-style cascade router.
     Calls models until output > confidence threshold.
+    Pass candidate LLM models to generate answers and judge LLM for evaluation.
     """
     def __init__(self, judge_llm, candidate_llm, llm_dict, threshold=0.7):
         self.model_order = candidate_llm
