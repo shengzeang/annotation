@@ -2,7 +2,7 @@
 Abstraction for annotation tasks.
 
 Defines the base interface for annotation operations.
-Includes abstract methods of generating LLMs prompts and parsing responses.
+Includes abstract methods of generating LLMs prompts and parsing results
 """
 from abc import ABC, abstractmethod
 from typing import Dict, Any
