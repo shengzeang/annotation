@@ -6,6 +6,7 @@ from base_structure.base_filter import BaseFilter
 class LLMNaiveFilter(BaseFilter):
     """
     LLM-based naive filter implementation.
+    Ranks all samples by LLM-rated score and returns top N samples.
     """
     def __init__(self, llm, budget: int = 200):
         self.llm = llm

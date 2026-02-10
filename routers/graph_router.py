@@ -14,7 +14,8 @@ except Exception:
 
 
 class GraphRouter(BaseRouter):
-    """Graph-based router: builds a bipartite graph between samples and models and propagates scores."""
+    """Graph-based router: builds a bipartite graph between samples and models and propagates scores.
+    Routing decisions are based on semantic similarity and graph-based score propagation"""
     def __init__(self, annotator, candidate_llms, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", topk: int = 8, alpha: float = 0.85, device: Optional[str] = None, train_budget: int = 50):
         self.annotator = annotator
         self.candidate_llms = candidate_llms
@@ -34,10 +35,12 @@ class GraphRouter(BaseRouter):
 
     @property
     def if_train(self):
+        """Signals if router requires training phase before inference"""
         self.ready = False
         return True
 
     def _encode_texts(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
+        """Converts texts into vector embeddings using pooled output or masked mean pooling."""
         all_embs = []
         for i in range(0, len(texts), batch_size):
             batch = texts[i: i + batch_size]
@@ -62,6 +65,7 @@ class GraphRouter(BaseRouter):
 
     def _personalized_propagation(self, pref: np.ndarray, max_iter: int = 20, tol: float = 1e-6) -> np.ndarray:
         # pref: preference over samples shape (N,)
+        """Personalized PageRank returns final relevance distribution"""
         N = len(pref)
         if N == 0:
             return np.zeros(0, dtype=np.float32)
@@ -105,6 +109,9 @@ class GraphRouter(BaseRouter):
             return r
 
     def score(self, sample: str, candidate_llms: List[str]) -> List[Dict[str, Any]]:
+        """Compute routing scores for candidate models given a new input sample,
+        based on similarity to past routed samples and graph-based score propagation.
+        Return ranked list of candidate models with normalized routing scores."""
         # if graph not built, fallback to simple token overlap
         if self.sample_embs is None or len(self.sample_embs) == 0:
             sample_words = set(sample.lower().split())
@@ -210,6 +217,8 @@ class GraphRouter(BaseRouter):
 
 
     def build_from_annotations(self, annotations, out_dir: str):
+        """Given previous texts and model chosen,
+        Builds graph structure with each sample connected to top k most similar samples"""
         samples = []
         sample_model_edges = []
         models_set = set()

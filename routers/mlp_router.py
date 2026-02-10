@@ -47,6 +47,7 @@ class MLPRouter(BaseRouter):
             return self.net(x).squeeze(-1)
 
     def _encode_texts(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
+        """Converts texts into vector embeddings using pooled output or masked mean pooling."""
         all_embs = []
         for i in range(0, len(texts), batch_size):
             batch = texts[i: i + batch_size]
@@ -77,6 +78,7 @@ class MLPRouter(BaseRouter):
         return feat
 
     def train(self, pairs: List[Dict[str, Any]], epochs: int = 5, lr: float = 1e-3, batch_size: int = 32):
+        """Train MLP router using labeled dataset"""
         samples = [p['sample'] for p in pairs]
         cands = [p['candidate'] for p in pairs]
         scores = np.array([p['score'] for p in pairs], dtype=np.float32)

@@ -32,6 +32,7 @@ class KNNRouter(BaseRouter):
         return True
 
     def _encode_texts(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
+        """Converts texts into vector embeddings using pooled output or masked mean pooling."""
         all_embs = []
         total = len(texts)
         processed = 0
@@ -67,6 +68,9 @@ class KNNRouter(BaseRouter):
         return np.vstack(all_embs)
 
     def score(self, sample: str, candidate_llms: List[str]) -> List[Dict[str, Any]]:
+        """Compute routing scores for candidate models given a new input sample,
+        based on similarity to past routed samples. Aggregate routed model votes of top-k nearest neighbors and 
+        return ranked list of candidate models with normalized routing scores."""
         if self.sample_embs is None or len(self.sample_embs) == 0:
             sample_words = set(sample.lower().split())
             scores = []
