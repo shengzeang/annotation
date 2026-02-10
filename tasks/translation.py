@@ -5,7 +5,7 @@ from base_structure.base_task import Task
 
 
 class Translation(Task):
-    """翻译任务实现: English to Chinese"""
+    """Translation task from English to Chinese. supporting dictionary hints."""
     def __init__(self, target_language="Chinese"):
         self.target_language = target_language
 

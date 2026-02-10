@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 class ActiveLearningFilter(BaseFilter):
     """
     Active Learning filter implementation.
+    Supported selection methods: "alps", "bertkm".
     """
     def __init__(self, method="alps", budget=100, batch_size=10, model_name="bert-base-uncased", force_fallback=True):
         self.method = method.lower()

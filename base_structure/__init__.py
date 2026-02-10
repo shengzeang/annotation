@@ -1,3 +1,5 @@
+"""Core abstractions shared across the annotation framework."""
+
 from .base_filter import BaseFilter
 from .base_router import BaseRouter
 from .base_task import Task

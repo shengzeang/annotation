@@ -5,13 +5,19 @@ from base_structure.base_task import Task
 
 
 class NERTask(Task): 
-    """命名实体识别任务实现"""
     def __init__(self, entity_types=None, language="zh"):
+        """Args:
+            entity_types (list[str], optional):
+                List of entity types to extract. If not provided, a default
+                set of common entity types is used.
+            language (str):
+                Language code of the input text (e.g. "zh", "en")."""
         self.entity_types = ["PERSON", "ORG", "GPE", "LOC", "DATE","CARDINAL","LANGUAGE"] if entity_types is None else entity_types #后期调用
         self.language = language
     
     def pre_process(self, sample: Dict[str, Any]) -> Dict[str, Any]:
-        """预处理样本"""
+        """Pre-process of input sample.
+        Noramlizes unicode characters and cleans whitespace"""
         text = sample.get("text", "")
         text = unicodedata.normalize("NFKC", text)
         text = re.sub(r"[ \t]+", " ", text)
