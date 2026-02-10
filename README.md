@@ -1,225 +1,111 @@
-## Annotation Repository
+# DataFlow-Annotator — Unified Data Filtering, Routing, and Annotation Framework
 
-This repository provides a lightweight Python framework for annotation workflows, routing/ filtering strategies, and active learning experiments. It collects several router and filter implementations plus evaluation utilities to help build and compare annotation pipelines.
+DataFlow-Annotator enables seamless integration of automated data governance and human intervention. In this unified workflow, data progresses through filtering, routing, and annotation stages within the same pipeline, eliminating the need to switch between different systems. Specifically, DataFlow-Annotator provides three key operators: Filter, Router, and Annotator.
 
-### Main use cases
-- Research and experiments: compare routing and filtering strategies for annotation efficiency and quality.
-- Small-scale annotation runs: serve as a skeleton for task distribution, result collection, and evaluation.
+- **Filter Operators**: Streamline data filtering through multiple consecutive Filter operators to extract the most valuable samples for the current task, leveraging strategies like active learning or data quality evaluation.
+- **Router Operators**: Dynamically allocate samples to the most suitable model within a user-defined set of candidate LLMs using algorithms such as MLP, KNN, Graph, or LLM-based routing, enhancing annotation efficiency and consistency.
+- **Annotator Operators**: Integrate with human annotation or review systems (e.g., UniMiner), supporting real-time progress tracking and result collection. Annotator operators route low-confidence samples back to human annotators while high-confidence samples are stored in a knowledge base. This knowledge base serves as backend storage for RAG (Retrieval-Augmented Generation), improving model annotation accuracy over time.
 
-### Key modules (examples)
-- `annotation.py`: core annotation logic and entry points.
-- `task.py`: task management utilities.
-- `routing.py` / `routers/`: routing abstractions and implementations (cascade, knn, mlp, llm, etc.).
-- `filtering.py` / `filters/`: filters used to select or prune candidate items.
-- `annotators/`: custom annotator implementations.
-- `misc/`: helper scripts and evaluation tools (e.g., `evaluate.py`, `llm_provider.py`).
-- `utils.py`: shared utility functions.
-- `datasets/`: small package with dataset helpers and thin dataset classes for common QA datasets.
-	- `SquadDataset`: SQuAD v1.1 parser and helpers (`from_file`, `from_url`, `to_sft`, `save_sft`).
-	- `CommonQADataset`: generic QA parser with heuristics to extract `question`, `context`, `answer` and produce examples compatible with the rest of the codebase.
-	- `HotpotDataset`, `TriviaQADataset`, `NQDataset`: thin wrappers around `CommonQADataset` for common dataset file formats.
-  
-Example usage:
+---
 
-```python
-from datasets import SquadDataset
+## 🌟 Key Features
 
-# Download and load SQuAD (won't re-download if file exists):
-ds = SquadDataset.from_url(save_path="squad_train.json")
+- **Unified Workflow**: Streamline data filtering, routing, and annotation in a single pipeline without switching systems.
+- **Streamlined Filtering**: Extract the most valuable samples using Filter operators based on active learning strategies or data quality evaluation.
+- **Dynamic Routing**: Allocate samples dynamically to the optimal model using Router operators powered by MLP, KNN, Graph, or LLM algorithms.
+- **Efficient Annotation**: Annotator operators integrate with human annotation systems, enabling real-time progress tracking and result collection.
+- **RAG Support**: Built-in knowledge base as backend storage for RAG, enhancing model annotation accuracy over time.
+- **Modular Design**: Flexible Router, Filter, and Annotator interfaces for easy extension and experimentation.
 
-# Load local file and convert to SFT JSONL for fine-tuning:
-ds = SquadDataset.from_file("squad_train.json", max_samples=1000)
-ds.save_sft("squad_sft.jsonl")
+---
+
+## 🚀 Quick Start
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/your-org/annotation.git
+cd annotation
 ```
 
-# Repository Structure: 
-## Base Structure
+### 2. Set Up the Environment
 
-### `base_structure/_kmeans_subproc.py`
+```bash
+python -m venv .venv
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
 
-Subprocess entrypoint to run KMeans safely in a separate process.
-This script is invoked with: python -m base_structure._kmeans_subproc <in.npy> <out.npy> <n_clusters> <mb_batch> <use_mini>
-It writes the cluster centers to <out.npy> on success and exits non-zero on failure.
+### 3. Run the HTTP Server
 
-### `base_structure/active_learning.py`
+```bash
+python -m api.server
+# or
+python api/server.py
+```
 
-Active learning module and sampling strategies.
-Allows different text representations and sampling strategies.
+### 4. Access the API
 
-**DataPool**
+Open [http://127.0.0.1:5000](http://127.0.0.1:5000) to interact with the provided endpoints or run pipeline graphs.
 
-Data pool containing text samples and corresponding IDs
+### 5. Explore the Frontend Interface
 
-**Embeddings**
+The frontend of DataFlow-Annotator is built using **React-Flow** for the user interface and **Python Flask** for the backend. It provides an intuitive way to create and manage annotation pipelines. Follow these steps to get started:
 
-Base class for embedding conversion
+1. **Pipeline Editor**: Drag and drop nodes (e.g., Filter, Router, Annotator) to build pipelines and visualize the data flow.
+2. **Node Editor**: Click on a node to edit its parameters directly in the interface.
+3. **Review Queue**: Access the review queue to manage and process data requiring human intervention. This section displays data that needs manual review and allows users to annotate and track progress in real-time.
 
-**Selector**
+---
 
-Base class for active learning samplers. Subclasses must implement select_indices. 
-Fall-back to simple selection in subclass.
+## 📂 Project Layout
 
-**BertEmbeddings**
+- **`annotation.py`**: Core annotator classes and human review queue.
+- **`api/`**: Contains `server.py`, a Flask-based runner for routers, filters, and graph pipelines.
+- **`base_structure/`**: Abstract base classes and active-learning implementations.
+- **`routers/`**: Router implementations (cascade, knn, mlp, llm, routerdc, graph, etc.).
+- **`filters/`**: Filter implementations (active learning, dataflow adapters, LLM-based filters).
+- **`tasks/`**: Task definitions and parsing logic (QA, classification, NER, summarization, translation).
+- **`datasets/`**: Lightweight dataset adapters and converters (SQuAD helpers, generic QA parsers).
+- **`misc/`**: Helper scripts, evaluation tools, and providers (e.g., `evaluate.py`, `llm_provider.py`).
 
-BERT text embedding
+---
 
-**BertKM**
+## 🛠️ Common Operations
 
-BERT + KMean sampling strategy.
-Selects closet samples to each of K cluster centres. 
+- **Human Review Queue**: Pipelines may write `human_review_queue.json` to the repo root. Use the `HumanReviewQueue` helper to export to a custom file.
+- **RAG Usage**: Construct `Annotator(..., rag=True, rag_method='bm25')` or `'tfidf'` to enable retrieval-augmented prompts.
 
-**SurprisalEmbeddings**
+---
 
-MLM surprisal embeddings
+## 👩‍💻 Developer Notes
 
-**ALPS**
+- When adding a new `router`, `filter`, or `task`, implement the interfaces in `base_structure/` to ensure compatibility with the runner.
+- The `api/server.py` runner dynamically instantiates classes (e.g., `filters.ActiveLearningFilter`) — prefer fully qualified import strings when configuring pipelines.
+- There is no enforced test framework in the repo; adding `pytest` tests for core modules is recommended.
 
-ALPS Selector.
-Ensures exact number of unique samples by supplementing
-cluser representatives with random picks when duplicates occur.
+---
 
-### `base_structure/base_filter.py`
-**BaseFilter**
+## 🤝 Contributing
 
-Abstract base class for filters.
+We welcome contributions! To get started:
 
-### `base_structure/base_router.py`
-**BaseRouter**
+1. Fork the repository and create a new branch for your feature or bugfix.
+2. Write clear, concise commit messages.
+3. Include usage examples and tests for new features.
+4. Submit a pull request with a detailed description of your changes.
 
-Abstract router interface for scoring candidate LLMs.
-Decoupled from specific tasks or datasets with cold-start training mechanism. 
+---
 
-### `base_structure/base_task.py`
+## 📜 License
 
-Abstraction for annotation tasks.
+This project is licensed under the [MIT License](LICENSE). Verify third-party dependency licenses before using this code in commercial products.
 
-Defines the base interface for annotation operations.
-Includes abstract methods of generating LLMs prompts and parsing results
+---
 
-### `base_structure/dataset.py`
+## 🙏 Acknowledgements
 
-Lightweight dataset utilities used across the project.
+Special thanks to all contributors and the open-source community for their support and inspiration.
 
-Provides a minimal Dataset class that wraps a list of dicts and offers
-convenience methods similar to the HuggingFace `datasets.Dataset` API
-enough for local scripts and filters in this repository.
-
-Features:
-- `from_list` / `to_list` for conversion
-- `from_json` / `save_json` helpers
-- `map` to transform examples
-- `filter` to keep examples matching a predicate
-- `shuffle` to reorder examples
-- `train_test_split` to split into two Dataset objects
-- basic indexing/iteration and length
-
-**Dataset**
-
-Simple in-memory dataset wrapper around a list of dicts.
-
-Example:
-        ds = Dataset.from_list([{"text": "a"}, {"text": "b"}])
-        ds2 = ds.map(lambda ex: {**ex, "len": len(ex["text"])})
-
-**DatasetStorage**
-
-Simple storage wrapper around `Dataset` that exposes a minimal
-`write`/`read` API compatible with dataflow-style operators.
-
-Methods:
-  - write(data): accept a `Dataset`, list of dicts, or dict and store as `Dataset`.
-  - read(output_type="dataset"): return `Dataset` (default), list, or pandas.DataFrame (lazy).
-  - get_keys_from_dataframe(): return list of keys for first example.
-
-## Filters
-
-### `filters/al_filter.py`
-**ActiveLearningFilter**
-
-Active Learning filter implementation.
-Supported selection methods: "alps", "bertkm".
-
-### `filters/dataflow_filter.py`
-**DataFlowFilter**
-
-Adapter that lets repository filters use operators from a DataFlow-like
-operator registry, or accept a custom operator class directly.
-
-Usage:
-  - Pass `operator_name` to load via `dataflow_operator_import.get_operator`
-    (when that module and `dataflow` operators are available).
-  - Or pass `operator_class` directly (recommended if you want to avoid
-    the dynamic import dependency).
-
-### `filters/llm_filter.py`
-**LLMNaiveFilter**
-
-LLM-based naive filter implementation.
-Ranks all samples by LLM-rated score and returns top N samples.
-
-## Routers
-
-### `routers/cascade_router.py`
-**CascadeRouter**
-
-FrugalGPT-style cascade router.
-Calls models until output > confidence threshold.
-Pass candidate LLM models to generate answers and judge LLM for evaluation.
-
-### `routers/graph_router.py`
-**GraphRouter**
-
-Graph-based router: builds a bipartite graph between samples and models and propagates scores.
-Routing decisions are based on semantic similarity and graph-based score propagation
-
-### `routers/knn_router.py`
-**KNNRouter**
-
-KNN-based router using historical annotated samples.
-
-### `routers/llm_router.py`
-**LLMRouter**
-
-Scores candidate LLMs for each sample using a scoring LLM (which can be local or API-backed).
-
-### `routers/mlp_router.py`
-**MLPRouter**
-
-A simple MLP-based router that uses encoded features of (sample, candidate_name)
-pairs and predicts a score in [0,1]. Supports training from labeled pairs and
-scoring new samples.
-
-### `routers/routerdc_router.py`
-**RouterDCRouter**
-
-Router-DC-style
-
-For each LLM, compute a "model identity vector" from our_anno.json
-During inference, encode the query and pick the most similar LLM.(comparing the query embedding with the model embedding)
-
-## Tasks
-
-### `tasks/classification.py`
-
-**ClassificationTask**
-
-Classification of texts into predefined categories
-
-### `tasks/ner.py`
-
-**NERTask**
-
-### `tasks/qa.py`
-**QATask**
-
-Question answering with confidence score output
-
-### `tasks/summary.py`
-**TextSummarization**
-
-Text summary within predefined length.
-
-### `tasks/translation.py`
-**Translation**
-
-Translation task from English to Chinese. supporting dictionary hints.
+---
