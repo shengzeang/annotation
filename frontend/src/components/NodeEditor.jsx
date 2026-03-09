@@ -1,13 +1,77 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import Button from './ui/Button';
-import Card from './ui/Card';
 
-function JsonEditor({ value, onChange, rows = 6 }) {
+const TYPE_COLORS = {
+  LoadData: '#3b82f6', Task: '#f97316', CandidateLLMs: '#8b5cf6',
+  Filter: '#22c55e', Router: '#ec4899', Annotate: '#f59e0b', Output: '#14b8a6',
+};
+
+function Field({ label, help, error, children }) {
+  return (
+    <div className="field-group">
+      <label className="field-label">{label}</label>
+      {children}
+      {help  && <div className="field-help">{help}</div>}
+      {error && <div className="field-error">{error}</div>}
+    </div>
+  );
+}
+
+function TextInput({ value, onChange, placeholder, list }) {
+  return (
+    <input
+      className="field-input"
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder}
+      list={list}
+    />
+  );
+}
+
+function NumberInput({ value, onChange, min, max, step, placeholder }) {
+  return (
+    <input
+      type="number"
+      className="field-input"
+      value={value}
+      onChange={onChange}
+      min={min}
+      max={max}
+      step={step}
+      placeholder={placeholder}
+    />
+  );
+}
+
+function Textarea({ value, onChange, rows = 5, placeholder }) {
+  return (
+    <textarea
+      className="field-input field-textarea"
+      value={value}
+      onChange={onChange}
+      rows={rows}
+      placeholder={placeholder}
+    />
+  );
+}
+
+function Select({ value, onChange, children }) {
+  return (
+    <select className="field-input field-select" value={value} onChange={onChange}>
+      {children}
+    </select>
+  );
+}
+
+function JsonEditor({ value, onChange, rows = 5 }) {
   const [txt, setTxt] = useState(() => JSON.stringify(value || {}, null, 2));
   const [err, setErr] = useState(null);
 
-  useEffect(() => setTxt(JSON.stringify(value || {}, null, 2)), [value]);
+  useEffect(() => {
+    setTxt(JSON.stringify(value || {}, null, 2));
+  }, [value]);
 
   const handle = (v) => {
     setTxt(v);
@@ -22,8 +86,41 @@ function JsonEditor({ value, onChange, rows = 6 }) {
 
   return (
     <div>
-      <textarea rows={rows} value={txt} onChange={(e) => handle(e.target.value)} className="w-full border border-gray-200 rounded px-2 py-1 bg-white" />
-      {err && <div className="text-xs text-red-600">JSON error: {err}</div>}
+      <Textarea
+        value={txt}
+        onChange={(e) => handle(e.target.value)}
+        rows={rows}
+        placeholder="{}"
+      />
+      {err && <div className="field-error">JSON error: {err}</div>}
+    </div>
+  );
+}
+
+function ClassInfoBox({ name, info }) {
+  if (!name) return null;
+  if (!info) return <div className="field-help" style={{ marginTop: 6 }}>Loading class info…</div>;
+  if (info.error) return <div className="field-error" style={{ marginTop: 6 }}>Error: {info.error}</div>;
+  return (
+    <div className="class-info-box">
+      {info.doc && <div style={{ marginBottom: 6 }}>{info.doc}</div>}
+      {info.init_params?.length > 0 && (
+        <div style={{ marginBottom: 4 }}>
+          <strong>Init params:</strong> <span style={{ color: '#6366f1' }}>{info.init_params.join(', ')}</span>
+        </div>
+      )}
+      {info.methods?.length > 0 && (
+        <div>
+          <strong>Methods:</strong>
+          {info.methods.slice(0, 5).map((m) => (
+            <div key={m.name} style={{ marginTop: 2, paddingLeft: 8 }}>
+              <code style={{ fontSize: 11 }}>{m.name}()</code>
+              {m.doc ? <span style={{ color: '#64748b' }}> — {m.doc.split('\n')[0]}</span> : null}
+            </div>
+          ))}
+          {info.methods.length > 5 && <div style={{ color: '#94a3b8', fontSize: 11 }}>…and {info.methods.length - 5} more</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -31,6 +128,7 @@ function JsonEditor({ value, onChange, rows = 6 }) {
 export default function NodeEditor({ node, updateNodeData, deleteNode, openConfirm }) {
   const [params, setParams] = useState(node.data?.params || {});
   const label = node.data?.label || node.type || 'Node';
+  const accent = TYPE_COLORS[label] || '#6366f1';
 
   useEffect(() => {
     setParams(node.data?.params || {});
@@ -40,16 +138,14 @@ export default function NodeEditor({ node, updateNodeData, deleteNode, openConfi
   useEffect(() => {
     let mounted = true;
     axios.get('http://localhost:5000/list_classes').then((res) => {
-      if (!mounted) return;
-      setClassLists(res.data || { filters: [], routers: [], tasks: [] });
+      if (mounted) setClassLists(res.data || { filters: [], routers: [], tasks: [] });
     }).catch(() => {});
-    return () => { mounted = false };
+    return () => { mounted = false; };
   }, []);
 
   const [classInfo, setClassInfo] = useState({});
   const fetchClassInfo = async (name) => {
-    if (!name) return;
-    if (classInfo[name]) return; // cached
+    if (!name || classInfo[name]) return;
     try {
       const res = await axios.get(`http://localhost:5000/class_info?class=${encodeURIComponent(name)}`);
       setClassInfo((s) => ({ ...s, [name]: res.data }));
@@ -58,224 +154,210 @@ export default function NodeEditor({ node, updateNodeData, deleteNode, openConfi
     }
   };
 
-  // fetch info for relevant fields when they change
   useEffect(() => {
     fetchClassInfo(params.filter_class);
     fetchClassInfo(params.router_class);
     fetchClassInfo(params.task_class);
   }, [params.filter_class, params.router_class, params.task_class]);
 
-  const setParam = (k, v) => setParams((p) => ({ ...p, [k]: v }));
-
+  const set = (k, v) => setParams((p) => ({ ...p, [k]: v }));
   const handleSave = () => updateNodeData(node.id, { params });
 
-  // Per-node typed forms
   const renderForm = () => {
-    const renderClassHelp = (name) => {
-      if (!name) return null;
-      const info = classInfo[name];
-      if (!info) return <div className="text-xs text-gray-600 mt-1.5">Loading class info...</div>;
-      if (info.error) return <div className="text-xs text-red-600 mt-1.5">Error fetching class info: {info.error}</div>;
-      return (
-        <div className="mt-2 p-2 bg-gray-50 border border-gray-200 text-sm">
-          {info.doc ? <div className="mb-2">{info.doc}</div> : null}
-          {info.init_params && info.init_params.length > 0 ? (
-            <div className="mb-1.5"><strong>__init__ params:</strong> {info.init_params.join(', ')}</div>
-          ) : null}
-          {info.methods && info.methods.length > 0 ? (
-            <div>
-              <strong>Methods</strong>
-              <ul className="mt-1.5">
-                {info.methods.slice(0, 6).map((m) => (
-                  <li key={m.name}><strong>{m.name}()</strong>{m.doc ? ` — ${m.doc.split('\n')[0]}` : ''}</li>
-                ))}
-                {info.methods.length > 6 ? <li>...more</li> : null}
-              </ul>
-            </div>
-          ) : null}
-        </div>
-      );
-    };
     switch (label) {
       case 'LoadData':
         return (
-          <div>
-            <div>
-              <label>Dataset name or file path</label>
-              <input value={params.dataset || ''} onChange={(e) => setParam('dataset', e.target.value)} className="w-full border border-gray-200 rounded px-2 py-1 bg-white" />
-            </div>
-            <div className="mt-2">
-              <label>Max samples</label>
-              <input type="number" value={params.max_samples || ''} onChange={(e) => setParam('max_samples', Number(e.target.value) || 0)} className="w-full border border-gray-200 rounded px-2 py-1 bg-white" />
-            </div>
-            <div className="mt-2">
-              <label>Inline samples (JSON list) — optional</label>
-              <JsonEditor value={params.samples || []} onChange={(v) => setParam('samples', v)} rows={8} />
-            </div>
-          </div>
+          <>
+            <Field label="Dataset name or path">
+              <TextInput value={params.dataset || ''} onChange={(e) => set('dataset', e.target.value)} placeholder="e.g. squad" />
+            </Field>
+            <Field label="Max samples">
+              <NumberInput value={params.max_samples || ''} onChange={(e) => set('max_samples', Number(e.target.value) || 0)} placeholder="e.g. 200" />
+            </Field>
+            <Field label="Inline samples (JSON list)" help="Optional: provide samples directly as a JSON array">
+              <JsonEditor value={params.samples || []} onChange={(v) => set('samples', v)} rows={6} />
+            </Field>
+          </>
         );
 
       case 'CandidateLLMs':
         return (
-            <div>
-            <label>Candidate LLMs (one per line)</label>
-            <textarea value={(params.candidate_llms || []).join('\n')} onChange={(e) => setParam('candidate_llms', e.target.value.split('\n').map((s) => s.trim()).filter(Boolean))} rows={6} className="w-full border border-gray-200 rounded p-2 bg-white" />
-          </div>
+          <Field label="Candidate LLMs" help="One model name per line">
+            <Textarea
+              value={(params.candidate_llms || []).join('\n')}
+              onChange={(e) => set('candidate_llms', e.target.value.split('\n').map((s) => s.trim()).filter(Boolean))}
+              rows={6}
+              placeholder={"gpt2\ndistilgpt2"}
+            />
+          </Field>
         );
 
       case 'Task':
         const taskVal = params.task_class || '';
         const taskValid = !taskVal || classLists.tasks.includes(taskVal);
         return (
-          <div>
-            <label>Task class (module.ClassName)</label>
-            <input list="tasks-list" value={params.task_class || ''} placeholder="e.g. tasks.QATask" onChange={(e) => setParam('task_class', e.target.value)} className="w-full border border-gray-200 rounded px-2 py-1 bg-white" />
-            <datalist id="tasks-list">
-              {classLists.tasks.map((c) => <option key={c} value={c} />)}
-            </datalist>
-            <div className="text-xs text-gray-600 mt-1.5">Help: Choose the Task class that generates prompts and parses outputs for annotation.</div>
-            {!taskValid && <div className="text-xs text-red-600">Task class not found in repository scan.</div>}
-            {renderClassHelp(taskVal)}
-            <div className="mt-2">
-              <label>Task params (JSON)</label>
-              <JsonEditor value={params.task_params || {}} onChange={(v) => setParam('task_params', v)} rows={6} />
-            </div>
-          </div>
+          <>
+            <Field
+              label="Task class"
+              help="Full Python module path, e.g. tasks.qa.QATask"
+              error={!taskValid ? 'Class not found in repository scan' : null}
+            >
+              <TextInput value={taskVal} onChange={(e) => set('task_class', e.target.value)} placeholder="tasks.qa.QATask" list="tasks-list" />
+              <ClassInfoBox name={taskVal} info={classInfo[taskVal]} />
+            </Field>
+            <Field label="Task params (JSON)">
+              <JsonEditor value={params.task_params || {}} onChange={(v) => set('task_params', v)} rows={5} />
+            </Field>
+          </>
         );
 
       case 'Filter':
         const filterVal = params.filter_class || '';
         const filterValid = !filterVal || classLists.filters.includes(filterVal);
         return (
-          <div>
-            <label>Filter class (module.ClassName)</label>
-            <input list="filters-list" value={params.filter_class || ''} placeholder="e.g. filters.al_filter.ActiveLearningFilter" onChange={(e) => setParam('filter_class', e.target.value)} className="w-full border border-gray-200 rounded px-2 py-1 bg-white" />
-            <datalist id="filters-list">
-              {classLists.filters.map((c) => <option key={c} value={c} />)}
-            </datalist>
-            <div className="text-xs text-gray-600 mt-1.5">Help: Enter the full python module path to the filter class, e.g. <code>filters.al_filter.ActiveLearningFilter</code>.</div>
-            {!filterValid && <div className="text-xs text-red-600">Class not found in repository scan.</div>}
-            {renderClassHelp(filterVal)}
-            <div className="mt-2">
-              <label>Filter params (JSON)</label>
-              <JsonEditor value={params.filter_params || {}} onChange={(v) => setParam('filter_params', v)} rows={6} />
-            </div>
-          </div>
+          <>
+            <Field
+              label="Filter class"
+              help="e.g. filters.al_filter.ActiveLearningFilter"
+              error={!filterValid ? 'Class not found in repository scan' : null}
+            >
+              <TextInput value={filterVal} onChange={(e) => set('filter_class', e.target.value)} placeholder="filters.al_filter.ActiveLearningFilter" list="filters-list" />
+              <ClassInfoBox name={filterVal} info={classInfo[filterVal]} />
+            </Field>
+            <Field label="Filter params (JSON)">
+              <JsonEditor value={params.filter_params || {}} onChange={(v) => set('filter_params', v)} rows={5} />
+            </Field>
+          </>
         );
 
       case 'Router':
         const routerVal = params.router_class || '';
         const routerValid = !routerVal || classLists.routers.includes(routerVal);
         return (
-          <div>
-            <label>Router class (module.ClassName)</label>
-            <input list="routers-list" value={params.router_class || ''} placeholder="e.g. routers.knn_router.KNNRouter" onChange={(e) => setParam('router_class', e.target.value)} className="w-full border border-gray-200 rounded px-2 py-1 bg-white" />
-            <datalist id="routers-list">
-              {classLists.routers.map((c) => <option key={c} value={c} />)}
-            </datalist>
-            <div className="text-xs text-gray-600 mt-1.5">Help: Pick or type the router class to use for routing logic.</div>
-            {!routerValid && <div className="text-xs text-red-600">Router class not found in repository scan.</div>}
-            {renderClassHelp(routerVal)}
-            <div className="mt-2">
-              <label>Router params (JSON)</label>
-              <JsonEditor value={params.router_params || {}} onChange={(v) => setParam('router_params', v)} rows={6} />
-            </div>
-            <div className="mt-2">
-              <label>Candidate LLMs (optional)</label>
-                <textarea value={(params.candidate_llms || []).join('\n')} placeholder={"e.g. gpt2\ndistilgpt2"} onChange={(e) => setParam('candidate_llms', e.target.value.split('\n').map((s) => s.trim()).filter(Boolean))} rows={4} className="w-full border border-gray-200 rounded p-2 bg-white" />
-            </div>
-          </div>
+          <>
+            <Field
+              label="Router class"
+              help="e.g. routers.knn_router.KNNRouter"
+              error={!routerValid ? 'Class not found in repository scan' : null}
+            >
+              <TextInput value={routerVal} onChange={(e) => set('router_class', e.target.value)} placeholder="routers.knn_router.KNNRouter" list="routers-list" />
+              <ClassInfoBox name={routerVal} info={classInfo[routerVal]} />
+            </Field>
+            <Field label="Router params (JSON)">
+              <JsonEditor value={params.router_params || {}} onChange={(v) => set('router_params', v)} rows={5} />
+            </Field>
+            <Field label="Candidate LLMs (optional)" help="One model name per line">
+              <Textarea
+                value={(params.candidate_llms || []).join('\n')}
+                onChange={(e) => set('candidate_llms', e.target.value.split('\n').map((s) => s.trim()).filter(Boolean))}
+                rows={4}
+                placeholder={"gpt2\ndistilgpt2"}
+              />
+            </Field>
+          </>
         );
 
       case 'Annotate':
       case 'Annotation':
+        const annotateTaskVal = params.task_class || '';
+        const annotateTaskValid = !annotateTaskVal || classLists.tasks.includes(annotateTaskVal);
         return (
-          <div>
-            <label>Candidate LLMs (one per line)</label>
-            <textarea value={(params.candidate_llms || []).join('\n')} onChange={(e) => setParam('candidate_llms', e.target.value.split('\n').map((s) => s.trim()).filter(Boolean))} rows={4} className="w-full border border-gray-200 rounded p-2 bg-white" />
-            <div className="mt-2">
-              <label>LLM mode</label>
-              <select value={params.llm_mode || 'local'} onChange={(e) => setParam('llm_mode', e.target.value)} className="w-full border border-gray-200 rounded px-2 py-1 bg-white">
+          <>
+            <Field label="Candidate LLMs" help="One model name per line">
+              <Textarea
+                value={(params.candidate_llms || []).join('\n')}
+                onChange={(e) => set('candidate_llms', e.target.value.split('\n').map((s) => s.trim()).filter(Boolean))}
+                rows={4}
+                placeholder={"gpt2\ndistilgpt2"}
+              />
+            </Field>
+            <Field label="LLM mode">
+              <Select value={params.llm_mode || 'local'} onChange={(e) => set('llm_mode', e.target.value)}>
                 <option value="local">local</option>
                 <option value="api">api</option>
-              </select>
-            </div>
-            <div className="mt-2">
-              <label>API config (JSON) — used if llm_mode=api</label>
-              <JsonEditor value={params.api_config || {}} onChange={(v) => setParam('api_config', v)} rows={6} />
-            </div>
-            <div className="mt-2">
-              <label>Task class</label>
-              {(() => {
-                const tval = params.task_class || '';
-                const valid = !tval || classLists.tasks.includes(tval);
-                return (
-                  <div>
-                    <input list="tasks-list" value={params.task_class || ''} placeholder="e.g. tasks.QATask" onChange={(e) => setParam('task_class', e.target.value)} className="w-full border border-gray-200 rounded px-2 py-1 bg-white" />
-                    {!valid && <div className="text-xs text-red-600">Task class not found in repository scan.</div>}
-                  </div>
-                );
-              })()}
-            {renderClassHelp(params.task_class)}
-            </div>
-            <div className="mt-2">
-              <label>Min confidence (optional, 0-1)</label>
-              <input type="number" step="0.01" min="0" max="1" value={params.min_confidence !== undefined ? params.min_confidence : ''} onChange={(e) => {
-                const v = e.target.value;
-                if (v === '') setParam('min_confidence', undefined); else setParam('min_confidence', Number(v));
-              }} className="w-full border border-gray-200 rounded px-2 py-1 bg-white" />
-            </div>
-          </div>
+              </Select>
+            </Field>
+            <Field label="API config (JSON)" help="Used when LLM mode is 'api'">
+              <JsonEditor value={params.api_config || {}} onChange={(v) => set('api_config', v)} rows={5} />
+            </Field>
+            <Field
+              label="Task class"
+              error={!annotateTaskValid ? 'Class not found in repository scan' : null}
+            >
+              <TextInput value={annotateTaskVal} onChange={(e) => set('task_class', e.target.value)} placeholder="tasks.qa.QATask" list="tasks-list" />
+              <ClassInfoBox name={annotateTaskVal} info={classInfo[annotateTaskVal]} />
+            </Field>
+            <Field label="Min confidence" help="Optional threshold 0–1">
+              <NumberInput
+                value={params.min_confidence !== undefined ? params.min_confidence : ''}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  set('min_confidence', v === '' ? undefined : Number(v));
+                }}
+                min={0} max={1} step={0.01}
+                placeholder="0.0"
+              />
+            </Field>
+          </>
         );
 
       case 'Output':
         return (
-          <div>
-              <label>Output path (optional)</label>
-              <input value={params.path || ''} onChange={(e) => setParam('path', e.target.value)} className="w-full border border-gray-200 rounded px-2 py-1 bg-white" />
-            </div>
+          <Field label="Output file path" help="e.g. out/annotations.json">
+            <TextInput value={params.path || ''} onChange={(e) => set('path', e.target.value)} placeholder="out/annotations.json" />
+          </Field>
         );
 
       default:
         return (
-          <div>
-            <label>Parameters (JSON)</label>
+          <Field label="Parameters (JSON)">
             <JsonEditor value={params || {}} onChange={(v) => setParams(v)} rows={8} />
-          </div>
+          </Field>
         );
     }
   };
 
-  // Global datalists so inputs can reference them even if their node form isn't mounted
-  const globalDatalists = (
-    <div className="hidden">
-      <datalist id="filters-list">
-        {classLists.filters.map((c) => <option key={c} value={c} />)}
-      </datalist>
-      <datalist id="routers-list">
-        {classLists.routers.map((c) => <option key={c} value={c} />)}
-      </datalist>
-      <datalist id="tasks-list">
-        {classLists.tasks.map((c) => <option key={c} value={c} />)}
-      </datalist>
+  // Hidden datalists for autocomplete
+  const datalists = (
+    <div style={{ display: 'none' }}>
+      <datalist id="filters-list">{classLists.filters.map((c) => <option key={c} value={c} />)}</datalist>
+      <datalist id="routers-list">{classLists.routers.map((c) => <option key={c} value={c} />)}</datalist>
+      <datalist id="tasks-list">{classLists.tasks.map((c) => <option key={c} value={c} />)}</datalist>
     </div>
   );
 
   return (
-    <Card className="node-editor">
-      {globalDatalists}
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">Node</h3>
-        <div className="text-sm text-slate-500">{label}</div>
+    <div>
+      {datalists}
+
+      {/* Type badge header */}
+      <div className="node-editor-header">
+        <div className="node-editor-type-badge" style={{ background: accent + '18', color: accent }}>
+          {label}
+        </div>
+        <div style={{ fontSize: 10.5, color: '#94a3b8', marginLeft: 'auto' }}>id: {node.id.slice(0, 8)}</div>
       </div>
 
-      <div className="mt-3">{renderForm()}</div>
+      {/* Form */}
+      <div style={{ paddingTop: 10 }}>
+        {renderForm()}
+      </div>
 
-      <div className="flex justify-end items-center gap-3 mt-4">
-        <Button variant="ghost" onClick={() => { setParams(node.data?.params || {}); }}>Reset</Button>
-        <Button variant="ghost" danger onClick={() => { openConfirm ? openConfirm(node.id, `Delete node \"${node.data?.label || node.id}\"?`) : (deleteNode && deleteNode(node.id)); }}>Delete</Button>
+      {/* Actions */}
+      <div className="node-editor-actions">
+        <Button variant="ghost" onClick={() => setParams(node.data?.params || {})}>Reset</Button>
+        <Button
+          danger
+          onClick={() => {
+            if (openConfirm) openConfirm(node.id, `Delete node "${node.data?.label || node.id}"?`);
+            else if (deleteNode) deleteNode(node.id);
+          }}
+        >
+          Delete
+        </Button>
+        <div style={{ flex: 1 }} />
         <Button variant="primary" onClick={handleSave}>Save</Button>
       </div>
-    </Card>
+    </div>
   );
 }

@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import Button from './ui/Button';
-import Card from './ui/Card';
 
-export default function ReviewQueue({ items, onUpdate, onRefresh }) {
+export default function ReviewQueue({ items, onUpdate }) {
   const [list, setList] = useState(items || []);
   const [sel, setSel] = useState(0);
   const [selectedSet, setSelectedSet] = useState(new Set());
+
   useEffect(() => { setList(items || []); setSel(0); }, [items]);
+
   const cur = list[sel] || null;
 
   const handleChange = (k, v) => {
@@ -22,26 +23,17 @@ export default function ReviewQueue({ items, onUpdate, onRefresh }) {
     });
   };
 
-  const selectAll = () => {
-    setSelectedSet(new Set(list.map((_, i) => i)));
-  };
-
-  const clearSelection = () => setSelectedSet(new Set());
-
-  const submitSingle = async (sample, action) => {
-    return axios.post('http://localhost:5000/submit_review', { sample, action });
-  };
+  const submitSingle = async (sample, action) =>
+    axios.post('http://localhost:5000/submit_review', { sample, action });
 
   const submitAction = async (action) => {
     if (!cur) return;
     try {
       await submitSingle(cur, action);
-      // remove from local list
       const next = list.filter((_, i) => i !== sel);
       setList(next);
       setSel((s) => Math.min(s, Math.max(0, next.length - 1)));
       if (onUpdate) onUpdate(next);
-      alert('Submission saved.');
     } catch (e) {
       console.error(e);
       alert('Failed to submit: ' + e.message);
@@ -49,104 +41,126 @@ export default function ReviewQueue({ items, onUpdate, onRefresh }) {
   };
 
   const submitBulk = async (action) => {
-    const indices = Array.from(selectedSet).sort((a, b) => b - a); // descending so removals by index won't shift earlier ones
+    const indices = Array.from(selectedSet).sort((a, b) => b - a);
     if (!indices.length) return alert('No items selected');
     try {
-      const promises = indices.map((i) => submitSingle(list[i], action).catch((e) => ({ error: e })));
-      const results = await Promise.all(promises);
-      // build next list removing successful submissions
-      const failed = [];
-      const successIndices = [];
-      results.forEach((r, idx) => {
-        if (r && r.data && r.data.status === 'ok') successIndices.push(indices[idx]); else failed.push(indices[idx]);
-      });
+      const results = await Promise.all(indices.map((i) => submitSingle(list[i], action).catch((e) => ({ error: e }))));
+      const successIndices = results.map((r, idx) => (r?.data?.status === 'ok' ? indices[idx] : null)).filter((x) => x !== null);
       const next = list.filter((_, i) => !successIndices.includes(i));
       setList(next);
       setSelectedSet(new Set());
       setSel((s) => Math.min(s, Math.max(0, next.length - 1)));
       if (onUpdate) onUpdate(next);
-      if (failed.length === 0) alert('Bulk submission saved.'); else alert('Some submissions failed.');
+      alert(successIndices.length === indices.length ? 'Bulk action completed.' : 'Some submissions failed.');
     } catch (e) {
       console.error(e);
-      alert('Bulk submission failed: ' + e.message);
+      alert('Bulk action failed: ' + e.message);
     }
   };
 
-  const serverCount = list.filter((i) => i && i._server).length;
-  const runOnlyCount = list.length - serverCount;
-
-  if (!list || list.length === 0) return (
-    <Card className="mt-3">
-      <div className="flex items-center gap-3">
-        <h4 className="text-sm font-semibold">Remaining</h4>
-        <Button variant="ghost" className="text-sm" onClick={onRefresh} disabled={!onRefresh}>Refresh</Button>
+  // Empty state — matches target image
+  if (!list.length) {
+    return (
+      <div className="rp-queue-empty">
+        <svg className="rp-empty-icon" width="36" height="36" viewBox="0 0 24 24" fill="none">
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" stroke="#9ca3af" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+          <polyline points="22 4 12 14.01 9 11.01" stroke="#9ca3af" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+        <div className="rp-empty-label">No items in review queue</div>
+        <div className="rp-empty-sublabel">Items needing human review will appear here</div>
       </div>
-      <div className="text-sm text-slate-500 mt-2">No items requiring human review.</div>
-    </Card>
-  );
+    );
+  }
 
   return (
-    <div className="mt-3">
-      <div className="flex items-start gap-4">
-        <div className="min-w-[180px] max-w-[260px] max-h-[420px] overflow-auto border-r border-slate-100 pr-2">
-          <div className="flex gap-2 mb-2 items-center">
-            <Button variant="ghost" className="text-sm" onClick={selectAll}>Select All</Button>
-            <Button variant="ghost" className="text-sm" onClick={clearSelection}>Clear</Button>
-            <div className="ml-auto text-sm text-slate-500">{list.length} items</div>
-          </div>
-          <div className="space-y-2">
-            {list.map((it, i) => (
-              <div key={i} className={`p-2 ${i === sel ? 'bg-slate-100' : ''} flex gap-2 items-start rounded`}>
-                <input type="checkbox" checked={selectedSet.has(i)} onChange={() => toggleSelect(i)} />
-                <div className="flex-1 cursor-pointer" onClick={() => setSel(i)}>
-                  <div className="flex items-center gap-2">
-                    <div className="text-sm font-semibold">{it.id || it.qid || `item ${i}`}</div>
-                    {it._server ? (
-                      <div className="text-xs bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">server</div>
-                    ) : (
-                      <div className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">run-only</div>
-                    )}
-                  </div>
-                  <div className="text-sm text-slate-500">{(it.annotation || '').toString().slice(0, 80)}</div>
+    <div>
+      {/* List */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <span style={{ fontSize: 11.5, fontWeight: 700, color: '#374151' }}>{list.length} items</span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            style={{ fontSize: 11, color: '#6366f1', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, padding: '2px 0' }}
+            onClick={() => setSelectedSet(new Set(list.map((_, i) => i)))}
+          >Select all</button>
+          <span style={{ color: '#e2e8f0' }}>|</span>
+          <button
+            style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, padding: '2px 0' }}
+            onClick={() => setSelectedSet(new Set())}
+          >Clear</button>
+        </div>
+      </div>
+
+      <div style={{ maxHeight: 200, overflowY: 'auto', marginBottom: 12 }}>
+        {list.map((it, i) => (
+          <div
+            key={i}
+            className={'review-item' + (i === sel ? ' active' : '')}
+            onClick={() => setSel(i)}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={selectedSet.has(i)}
+                onChange={() => toggleSelect(i)}
+                onClick={(e) => e.stopPropagation()}
+                style={{ accentColor: '#6366f1', flexShrink: 0 }}
+              />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: '#1e293b' }}>{it.id || it.qid || `item ${i + 1}`}</span>
+                  <span className="review-badge" style={it._server
+                    ? { background: '#f0fdf4', color: '#16a34a' }
+                    : { background: '#fffbeb', color: '#d97706' }}>
+                    {it._server ? 'server' : 'run'}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {String(it.annotation || '').slice(0, 60)}
                 </div>
               </div>
-            ))}
+            </div>
           </div>
-        </div>
+        ))}
+      </div>
 
-        <div className="flex-1">
-          <div className="mb-2">
-            <strong className="text-sm">Selected</strong>
-            <div className="text-sm text-slate-700 mt-2">{cur && (cur.question || cur.q || cur.text || JSON.stringify(cur).slice(0,200))}</div>
-          </div>
-
-          <div className="mt-3">
-            <label className="block text-sm mb-1">Annotation</label>
-            <input className="w-full border border-slate-100 rounded px-2 py-1" value={cur?.annotation || ''} onChange={(e) => handleChange('annotation', e.target.value)} />
+      {/* Detail view */}
+      {cur && (
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 5 }}>Selected item</div>
+          <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.6, background: '#f8fafc', borderRadius: 7, padding: '9px 10px', marginBottom: 10, border: '1px solid #e2e8f0' }}>
+            {cur.question || cur.q || cur.text || JSON.stringify(cur).slice(0, 200)}
           </div>
 
-          <div className="mt-3">
-            <label className="block text-sm mb-1">Confidence</label>
-            <input type="number" step="0.01" min="0" max="1" value={cur?.confidence || 0} onChange={(e) => handleChange('confidence', Number(e.target.value) || 0)} className="w-28 border border-slate-100 rounded px-2 py-1" />
+          <div className="field-group">
+            <label className="field-label">Annotation</label>
+            <input className="field-input" value={cur.annotation || ''} onChange={(e) => handleChange('annotation', e.target.value)} placeholder="Enter annotation…" />
           </div>
 
-          <div className="mt-3">
-            <label className="block text-sm mb-1">Notes (optional)</label>
-            <textarea rows={4} className="w-full border border-slate-100 rounded px-2 py-1" value={cur?.notes || ''} onChange={(e) => handleChange('notes', e.target.value)} />
+          <div className="field-group">
+            <label className="field-label">Confidence (0–1)</label>
+            <input type="number" step="0.01" min="0" max="1" className="field-input" value={cur.confidence || 0} onChange={(e) => handleChange('confidence', Number(e.target.value) || 0)} style={{ width: 90 }} />
           </div>
 
-          <div className="mt-4 flex items-center gap-2">
+          <div className="field-group">
+            <label className="field-label">Notes</label>
+            <textarea rows={3} className="field-input field-textarea" value={cur.notes || ''} onChange={(e) => handleChange('notes', e.target.value)} placeholder="Optional notes…" />
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
             <Button variant="primary" onClick={() => submitAction('update')}>Save</Button>
             <Button variant="primary" onClick={() => submitAction('approve')}>Approve</Button>
             <Button variant="ghost" onClick={() => submitAction('reject')}>Reject</Button>
-            <div className="ml-auto flex gap-2">
-              <Button variant="primary" onClick={() => submitBulk('approve')} disabled={selectedSet.size === 0}>Bulk Approve</Button>
-              <Button variant="ghost" onClick={() => submitBulk('reject')} disabled={selectedSet.size === 0}>Bulk Reject</Button>
-            </div>
-            <div className="ml-3 text-sm text-slate-500">Server: {serverCount} · Run-only: {runOnlyCount}</div>
           </div>
+
+          {selectedSet.size > 0 && (
+            <div style={{ display: 'flex', gap: 6, paddingTop: 8, borderTop: '1px solid #f1f5f9', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>{selectedSet.size} selected:</span>
+              <Button variant="primary" onClick={() => submitBulk('approve')}>Bulk Approve</Button>
+              <Button variant="ghost" onClick={() => submitBulk('reject')}>Bulk Reject</Button>
+            </div>
+          )}
         </div>
-      </div>
+      )}
     </div>
   );
 }
