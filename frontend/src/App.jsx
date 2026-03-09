@@ -54,6 +54,7 @@ export default function App() {
   const [reviewItems, setReviewItems] = useState([]);
   const [confirm, setConfirm] = useState({ open: false, targetId: null, message: '' });
   const [running, setRunning] = useState(false);
+  const [rightTab, setRightTab] = useState('properties'); // 'properties' | 'review' | 'completed'
 
   // Load persisted review queue
   React.useEffect(() => {
@@ -117,6 +118,7 @@ export default function App() {
 
   const onNodeClick = useCallback((event, node) => {
     setSelectedNode(node);
+    setRightTab('properties');
   }, []);
 
   const onPaneClick = useCallback(() => {
@@ -345,45 +347,68 @@ export default function App() {
           </ReactFlow>
         </div>
 
-        {/* ── Right panel (stacked, no tabs) ── */}
+        {/* ── Right panel (tabs) ── */}
         <div className="right-panel">
+
+          {/* Tab bar */}
+          <div className="right-tabs">
+            <button
+              className={'right-tab' + (rightTab === 'properties' ? ' active' : '')}
+              onClick={() => setRightTab('properties')}
+            >
+              Properties
+            </button>
+            <button
+              className={'right-tab' + (rightTab === 'review' ? ' active' : '')}
+              onClick={() => setRightTab('review')}
+            >
+              Review Queue
+              {reviewItems.length > 0 && (
+                <span className="right-tab-badge">{reviewItems.length}</span>
+              )}
+            </button>
+            <button
+              className={'right-tab' + (rightTab === 'completed' ? ' active' : '')}
+              onClick={() => setRightTab('completed')}
+            >
+              Completed
+            </button>
+          </div>
+
+          {/* Tab content */}
           <div className="right-panel-scroll">
 
-            {/* ── Node Editor section ── */}
-            <div className="rp-section">
-              <div className="rp-section-header">
-                <span className="rp-section-title">Node Editor</span>
-              </div>
-
-              {selectedNode ? (
-                <NodeEditor
-                  node={selectedNode}
-                  updateNodeData={updateNodeData}
-                  deleteNode={deleteNodeById}
-                  openConfirm={(id, message) => setConfirm({ open: true, targetId: id, message })}
-                />
-              ) : (
-                <div className="rp-empty-state">
-                  <div className="rp-empty-text">Select a node to edit its params</div>
+            {rightTab === 'properties' && (
+              <div className="rp-section">
+                <div className="rp-section-header">
+                  <span className="rp-section-title">Node Editor</span>
                 </div>
-              )}
-            </div>
+                {selectedNode ? (
+                  <NodeEditor
+                    node={selectedNode}
+                    updateNodeData={updateNodeData}
+                    deleteNode={deleteNodeById}
+                    openConfirm={(id, message) => setConfirm({ open: true, targetId: id, message })}
+                  />
+                ) : (
+                  <div className="rp-empty-state">
+                    <div className="rp-empty-text">Select a node to edit its params</div>
+                  </div>
+                )}
+              </div>
+            )}
 
-            {/* ── Divider ── */}
-            <div className="rp-divider" />
+            {rightTab === 'review' && (
+              <div className="rp-section">
+                <ReviewQueue items={reviewItems} onUpdate={(items) => setReviewItems(items)} />
+              </div>
+            )}
 
-            {/* ── Review Queue section ── */}
-            <div className="rp-section">
-              <ReviewQueue items={reviewItems} onUpdate={(items) => setReviewItems(items)} />
-            </div>
-
-            {/* ── Divider ── */}
-            <div className="rp-divider" />
-
-            {/* ── Completed Samples section ── */}
-            <div className="rp-section">
-              <CompletedSamples />
-            </div>
+            {rightTab === 'completed' && (
+              <div className="rp-section">
+                <CompletedSamples />
+              </div>
+            )}
 
           </div>
         </div>
