@@ -9,6 +9,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from base_structure.base_task import Task
 from tasks.qa import QATask
+from rag import VectorKnowledgeBase
 
 
 class HumanReviewQueue:
@@ -28,89 +29,135 @@ class HumanReviewQueue:
 
 
 class Annotator:
-    """使用 Qwen 进行标注, LLM调用抽象化"""
-    def __init__(self, candidate_llms, llm_dict, confidence_threshold: float = 0.7, rag: bool = False,
-                 rag_method: str = "bm25", kb_path: str = "knowledge_base.json", task: Task = None):
+    """使用 Qwen 进行标注, LLM调用抽象化
+
+    Parameters
+    ----------
+    candidate_llms:
+        List of LLM identifiers available for routing.
+    llm_dict:
+        Mapping from LLM identifier to an ``LLMBase`` instance.
+    confidence_threshold:
+        Minimum confidence score (0–1) required for a sample to be admitted
+        to the knowledge base.
+    avg_logprob_threshold:
+        Minimum average log-probability of generated tokens required for KB
+        admission.  Log-probs are always ≤ 0; values closer to 0 indicate
+        higher confidence (e.g. ``-1.0``).  Set to ``None`` to disable.
+    rag:
+        Whether to enable RAG context injection at inference time.
+    rag_method:
+        Legacy option kept for backward compatibility.  The knowledge base
+        now always uses semantic (sentence-transformer) search with BM25 as
+        a fallback.  Ignored when ``rag=True``.
+    kb_path:
+        Path to the JSON file that backs the knowledge base.
+    kb_encoder_name:
+        Sentence-transformer model used for knowledge-base embeddings.
+    kb_encoder:
+        Pre-built encoder object (shared from another component).  When
+        provided, ``kb_encoder_name`` is ignored.
+    task:
+        Task object defining prompt construction and output parsing.
+    outlier_purge_interval:
+        Number of new KB additions between consecutive outlier-purge runs.
+        Set to ``0`` to disable periodic purging.
+    outlier_z_threshold:
+        Z-score cut-off for answer-similarity outlier removal.
+    """
+
+    def __init__(
+        self,
+        candidate_llms,
+        llm_dict,
+        confidence_threshold: float = 0.7,
+        avg_logprob_threshold: float = None,
+        rag: bool = False,
+        rag_method: str = "bm25",
+        kb_path: str = "knowledge_base.json",
+        kb_encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        kb_encoder=None,
+        task: Task = None,
+        outlier_purge_interval: int = 50,
+        outlier_z_threshold: float = 2.0,
+    ):
         self.candidate_llms = candidate_llms
         self.llm_dict = llm_dict
         self.confidence_threshold = confidence_threshold
+        self.avg_logprob_threshold = avg_logprob_threshold
         self.human_review_queue = HumanReviewQueue()
-        self.kb_path = kb_path
         self.rag = rag
+        # rag_method kept for backward-compat but VectorKnowledgeBase is always used.
         self.rag_method = rag_method.lower() if rag_method else "bm25"
-        # 加载本地知识库
-        self.knowledge_base = self._load_knowledge_base()
         self.task = task or QATask()
 
+        self.outlier_purge_interval = outlier_purge_interval
+        self.outlier_z_threshold = outlier_z_threshold
+        self._additions_since_purge: int = 0
+
+        # Robust vector-based knowledge base.
+        self.knowledge_base = VectorKnowledgeBase(
+            kb_path=kb_path,
+            encoder_name=kb_encoder_name,
+            encoder=kb_encoder,
+        )
+
+    # ------------------------------------------------------------------
+    # Backward-compatible property so code that reads
+    # ``annotator.kb_path`` still works.
+    # ------------------------------------------------------------------
+
+    @property
+    def kb_path(self) -> str:
+        return self.knowledge_base.kb_path
+
+    # ------------------------------------------------------------------
+    # Deprecated helpers kept for backward compatibility
+    # ------------------------------------------------------------------
+
     def _load_knowledge_base(self):
-        import os, json
-        if os.path.exists(self.kb_path):
-            try:
-                with open(self.kb_path, "r", encoding="utf-8") as f:
-                    kb = json.load(f)
-                logger = logging.getLogger(__name__)
-                logger.info("Loaded knowledge base from %s, size=%d", self.kb_path, len(kb))
-                return kb
-            except Exception as e:
-                logger = logging.getLogger(__name__)
-                logger.exception("Failed to load knowledge base: %s", e)
-        return []
+        """Deprecated – the VectorKnowledgeBase manages persistence internally."""
+        return self.knowledge_base.entries
 
     def _save_knowledge_base(self):
-        import json
-        with open(self.kb_path, "w", encoding="utf-8") as f:
-            json.dump(self.knowledge_base, f, ensure_ascii=False, indent=2)
-        # print(f"Knowledge base updated: {self.kb_path}, size={len(self.knowledge_base)}")
+        """Deprecated – the VectorKnowledgeBase manages persistence internally."""
+        self.knowledge_base._save()
 
     def _rag_retrieve(self, question: str, topk: int = 3):
-        """支持BM25和TF-IDF两种RAG检索方式, 用户可选, 默认BM25"""
-        # return empty if no knowledge base or no usable texts
-        if not self.knowledge_base:
-            return []
-        questions = [item.get("question", "") for item in self.knowledge_base]
-        # filter out empty or non-string entries
-        questions = [q for q in questions if isinstance(q, str) and q.strip()]
-        if not questions:
-            return []
-        if self.rag_method == "bm25":
-            tokenized_corpus = [q.lower().split() for q in questions]
-            # BM25 requires at least one non-empty document
-            if not tokenized_corpus or not any(len(t) > 0 for t in tokenized_corpus):
-                return []
-            bm25 = BM25Okapi(tokenized_corpus)
-            scores = bm25.get_scores(question.lower().split())
-            top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:topk]
-            return [self.knowledge_base[i] for i in top_indices if scores[i] > 0]
-        elif self.rag_method == "tfidf":
-            # TF-IDF requires at least one non-empty document
-            try:
-                tfidf = TfidfVectorizer().fit(questions + [question])
-                q_vecs = tfidf.transform(questions)
-                query_vec = tfidf.transform([question])
-                sims = cosine_similarity(query_vec, q_vecs)[0]
-                top_indices = sims.argsort()[::-1][:topk]
-                return [self.knowledge_base[i] for i in top_indices if sims[i] > 0]
-            except Exception:
-                return []
-        else:
-            # fallback: 词重叠
-            scored = []
-            for item in self.knowledge_base:
-                q2 = item.get("question", "")
-                overlap = len(set(question.lower().split()) & set(q2.lower().split()))
-                scored.append((overlap, item))
-            scored.sort(reverse=True, key=lambda x: x[0])
-            return [x[1] for x in scored[:topk] if x[0] > 0]
+        """Delegate to VectorKnowledgeBase.retrieve (kept for back-compat)."""
+        return self.knowledge_base.retrieve(question, topk=topk)
+
+    # ------------------------------------------------------------------
+    # Core annotation logic
+    # ------------------------------------------------------------------
+
+    def _passes_thresholds(self, conf, avg_logprob) -> bool:
+        """Return True when *both* quality thresholds are satisfied.
+
+        The confidence threshold is mandatory.  The log-probability threshold
+        is only applied when ``avg_logprob_threshold`` is configured *and*
+        the LLM actually returned a log-probability value (i.e. the value is
+        not ``None``).
+        """
+        if conf < self.confidence_threshold:
+            return False
+        if (
+            self.avg_logprob_threshold is not None
+            and avg_logprob is not None
+            and avg_logprob < self.avg_logprob_threshold
+        ):
+            return False
+        return True
 
     def annotate(self, sample: Dict[str, Any], assigned_llm: str = None) -> Dict[str, Any]:
         if self.rag:
             # RAG 检索相似历史标注
-            rag_examples = self._rag_retrieve(sample.get("question", ""), topk=3)
+            rag_examples = self.knowledge_base.retrieve(sample.get("question", ""), topk=3)
             # 通过Task对象生成prompt
             prompt = self.task.get_prompt(sample, rag_examples)
         else:
             prompt = self.task.get_prompt(sample)
-        if assigned_llm == None:
+        if assigned_llm is None:
             llm = sample.get('route')
         else:
             llm = assigned_llm
@@ -120,7 +167,17 @@ class Annotator:
                 if candidate in str(llm):
                     best_llm = candidate
             llm = best_llm
-        output = self.llm_dict[llm].generate(prompt, max_new_tokens=50)
+
+        # Use generate_with_logprobs when available for dual-threshold control.
+        llm_obj = self.llm_dict[llm]
+        avg_logprob = None
+        if hasattr(llm_obj, 'generate_with_logprobs'):
+            try:
+                output, avg_logprob = llm_obj.generate_with_logprobs(prompt, max_new_tokens=50)
+            except Exception:
+                output = llm_obj.generate(prompt, max_new_tokens=50)
+        else:
+            output = llm_obj.generate(prompt, max_new_tokens=50)
 
         # 通过Task对象解析LLM输出
         parsed = self.task.parse_output(output)
@@ -128,14 +185,22 @@ class Annotator:
         conf = parsed.get("confidence", random.random())
 
         result = {**sample, "route": llm, "annotation": annotation, "confidence": conf}
-        if conf < self.confidence_threshold:
+        if avg_logprob is not None:
+            result["avg_logprob"] = avg_logprob
+
+        if not self._passes_thresholds(conf, avg_logprob):
             result["needs_human"] = True
             self.human_review_queue.add(result)
         else:
             result["needs_human"] = False
-            # 标注通过的样本加入知识库并保存
-            self.knowledge_base.append(result)
-            self._save_knowledge_base()
+            # 标注通过的样本加入知识库
+            self.knowledge_base.add(result)
+            # Trigger periodic outlier purging.
+            if self.outlier_purge_interval > 0:
+                self._additions_since_purge += 1
+                if self._additions_since_purge >= self.outlier_purge_interval:
+                    self._additions_since_purge = 0
+                    self.knowledge_base.purge_outliers(z_threshold=self.outlier_z_threshold)
         return result
 
     def annotate_batch(self, dataset: List[Dict[str, Any]], assigned_llm: str = None, progress_cb=None) -> List[Dict[str, Any]]:
