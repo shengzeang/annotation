@@ -15,10 +15,8 @@ import CompactNode from './components/CompactNode';
 import NodeEditor from './components/NodeEditor';
 import ConfirmModal from './components/ConfirmModal';
 import ReviewQueue from './components/ReviewQueue';
-import Button from './components/ui/Button';
-import Card from './components/ui/Card';
+import CompletedSamples from './components/CompletedSamples';
 import axios from 'axios';
-import { PlayIcon, TrashIcon, PencilSquareIcon, DocumentTextIcon } from '@heroicons/react/24/solid';
 
 const initialNodes = [
   // Starting nodes
@@ -46,7 +44,7 @@ const initialNodes = [
     id: 'n4',
     type: 'compact',
     position: { x: 260, y: 200 },
-    data: { label: 'Filter', params: { filter_class: 'filters.al_filter.ActiveLearningFilter', filter_params: { method: 'alps', budget: 100, batch_size: 10 } } },
+    data: { label: 'Filter', params: { filter_class: 'filters.al_filter.ActiveLearningFilter', filter_params: { method: 'alps', budget: 100, batch_size: 20 } } },
   },
   {
     id: 'n5',
@@ -58,7 +56,7 @@ const initialNodes = [
     id: 'n6',
     type: 'compact',
     position: { x: 660, y: 200 },
-    data: { label: 'Annotate', params: { candidate_llms: ['gpt2', 'distilgpt2'], llm_mode: 'local', task_class: 'tasks.qa.QATask', min_confidence: 0.5 } },
+    data: { label: 'Annotate', params: { candidate_llms: ['gpt2', 'distilgpt2'], llm_mode: 'local', task_class: 'tasks.qa.QATask' } },
   },
   {
     id: 'n7',
@@ -83,7 +81,8 @@ const initialEdges = [
   { id: 'e3-5', source: 'n3', target: 'n5' },
   { id: 'e3-6', source: 'n3', target: 'n6' },
   { id: 'e2-6', source: 'n2', target: 'n6' },
-  ];
+];
+
 export default function App() {
   const [nodes, setNodes] = useState(initialNodes);
   const [edges, setEdges] = useState(initialEdges);
@@ -91,47 +90,6 @@ export default function App() {
   const [prevNodes, setPrevNodes] = useState(null);
   const [undoStack, setUndoStack] = useState([]);
   const [reviewItems, setReviewItems] = useState([]);
-  const [rightView, setRightView] = useState('node'); // 'node' | 'results'
-
-  const [runResults, setRunResults] = useState(null);
-  const [displayResults, setDisplayResults] = useState(null);
-  const [latestRunId, setLatestRunId] = useState(null);
-  
-  const [runCols, setRunCols] = useState({});
-  const [runPage, setRunPage] = useState({});
-  const [runPerPage, setRunPerPage] = useState({});
-  
-  // Transform runResults by fetching any saved output files so UI shows file contents
-  React.useEffect(() => {
-    let mounted = true;
-    const fetchAll = async () => {
-      if (!runResults) { setDisplayResults(null); return; }
-      try {
-        const entries = await Promise.all(Object.entries(runResults).map(async ([nodeId, out]) => {
-          if (out && typeof out === 'object' && out.saved_to) {
-            try {
-              const resp = await axios.get('http://localhost:5000/read_output', { params: { run_id: latestRunId, node_id: nodeId } });
-              if (resp.data && resp.data.status === 'ok') {
-                // if the file contains array or {items: [...]}, normalize
-                return [nodeId, resp.data.data];
-              }
-            } catch (e) {
-              // fallthrough to return original
-            }
-          }
-          return [nodeId, out];
-        }));
-        if (!mounted) return;
-        setDisplayResults(Object.fromEntries(entries));
-      } catch (e) {
-        console.error('Failed to fetch output files', e);
-        setDisplayResults(runResults);
-      }
-    };
-    fetchAll();
-    return () => { mounted = false; };
-  }, [runResults, latestRunId]);
-  // runProgress removed; node-local progress will be stored on each node's data.progress
 
   // load persisted review queue on mount
   React.useEffect(() => {
@@ -220,8 +178,7 @@ export default function App() {
 
   const onNodeClick = useCallback((event, node) => {
     setSelectedNode(node);
-    try { setRightView('node'); } catch (e) {}
-  }, [setSelectedNode, setRightView]);
+  }, []);
 
   const deleteNodeById = useCallback((id) => {
     if (!id) return;
@@ -251,66 +208,8 @@ export default function App() {
   const handleRun = async () => {
     const payload = { nodes, edges };
     try {
-    const res = await axios.post('http://localhost:5000/run_graph', payload);
-    const run_id = res.data.run_id;
-    setLatestRunId(run_id);
-      // start polling progress if run_id provided
-      if (run_id) {
-        // clear previous node progress for Filter/Router/Annotate
-        setNodes((prev) => prev.map((n) => {
-          const label = n.data && n.data.label ? n.data.label : '';
-          if (['Filter', 'Router', 'Annotate'].includes(label)) {
-            const d = { ...n.data };
-            delete d.progress;
-            return { ...n, data: d };
-          }
-          return n;
-        }));
-        // Use Server-Sent Events to update node-local progress live
-        try {
-          const es = new EventSource(`http://localhost:5000/run_progress_stream?run_id=${run_id}`);
-          es.onmessage = (ev) => {
-            try {
-              const data = JSON.parse(ev.data || '{}') || {};
-              const nodeProgress = (data && data.nodes) ? data.nodes : {};
-              if (nodeProgress && Object.keys(nodeProgress).length) {
-                setNodes((prev) => prev.map((n) => {
-                  const p = nodeProgress[n.id];
-                  if (p) {
-                    return { ...n, data: { ...n.data, progress: p } };
-                  }
-                  return n;
-                }));
-              }
-              if (data.status && data.status !== 'running') {
-                // fetch final outputs from server and show them in UI
-                (async () => {
-                          try {
-                              const resp = await axios.get('http://localhost:5000/run_progress', { params: { run_id } });
-                              if (resp.data && resp.data.status === 'ok') {
-                                const prog = resp.data.progress || {};
-                                setRunResults(prog.outputs || prog.context || {});
-                              }
-                  } catch (e) {
-                    console.error('failed fetching final run results', e);
-                  }
-                })();
-                try { es.close(); } catch (e) {}
-              }
-            } catch (e) {
-              console.error('failed parsing progress stream', e);
-            }
-          };
-          es.onerror = (err) => {
-            console.error('progress stream error', err);
-            try { es.close(); } catch (e) {}
-          };
-          window.__run_progress_es = es;
-        } catch (e) {
-          console.warn('SSE not available; no live node progress will be shown', e);
-        }
-      }
-      // Run started; UI updates are handled via SSE — no blocking alert.
+      const res = await axios.post('http://localhost:5000/run_graph', payload);
+      alert('Run completed, check console for output.');
       console.log('Run result:', res.data);
       // extract human-review items from result context/outputs
       try {
@@ -457,164 +356,66 @@ export default function App() {
     setSelectedNode(n ? { ...n, data: { ...n.data, ...data } } : null);
   };
 
-
-
   return (
-    <div className="h-screen flex flex-row">
-      <div className="w-[260px] p-3">
+    <div style={{ height: '100vh', display: 'flex' }}>
+      <ReactFlowProvider>
         <Sidebar setNodes={setNodes} setEdges={setEdges} nodes={nodes} />
-      </div>
 
-      <div className="flex-1 flex flex-col">
-        <ReactFlowProvider>
-          <div className="flex flex-row h-full">
-            <div className="flex-1 flex flex-col">
-              <div className="h-[60vh] min-h-[360px] border-b border-gray-200 relative">
-                <div className="absolute top-[10px] right-[12px] z-50">
-                  <div className="flex items-center gap-2">
-                    <Button variant="primary" onClick={handleRun} title="Run the current graph" className="inline-flex items-center gap-2 px-3 py-1.5">
-                      <PlayIcon className="w-4 h-4" />
-                      <span>Run Graph</span>
-                    </Button>
+        <div style={{ flex: 1 }}>
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onNodesDelete={onNodesDelete}
+            onEdgesDelete={onEdgesDelete}
+            onNodeClick={onNodeClick}
+            fitView
+          >
+            <Background />
+            <Controls />
+            <MiniMap />
+            <Panel position="top-left">
+              <div className="panel-actions">
+                <button className="btn btn-primary" onClick={handleRun} title="Run the current graph">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 3v18l15-9L5 3z" fill="white"/></svg>
+                  <span>Run Graph</span>
+                </button>
 
-                    <Button variant="ghost" onClick={compactLayout} title="Rearrange nodes compactly" className="inline-flex items-center gap-2 px-3 py-1.5">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-gray-700">
-                        <path d="M12 4v16" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
-                      </svg>
-                      <span>Compact</span>
-                    </Button>
+                <button className="btn btn-secondary" onClick={compactLayout} title="Rearrange nodes compactly">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 2v20" stroke="#0f172a" strokeWidth="1.6" strokeLinecap="round"/></svg>
+                  <span>Compact</span>
+                </button>
 
-                    <Button variant="ghost" onClick={handleUndo} disabled={!(prevNodes || (undoStack && undoStack.length > 0))} title="Undo last action (deletes or layout)" className={`inline-flex items-center gap-2 px-3 py-1.5 ${!(prevNodes || (undoStack && undoStack.length > 0)) ? 'cursor-not-allowed opacity-60' : ''}`}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M21 7v6h-6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M3 17a9 9 0 0115.9-6.36L21 11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                      <span>Undo</span>
-                    </Button>
+                <button className="btn btn-secondary" onClick={handleUndo} disabled={!(prevNodes || (undoStack && undoStack.length > 0))} title="Undo last action (deletes or layout)">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M21 7v6h-6" stroke="#0f172a" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M3 17a9 9 0 0115.9-6.36L21 11" stroke="#0f172a" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  <span>Undo</span>
+                </button>
 
-                    <Button variant="primary" onClick={deleteSelected} disabled={!selectedNode} title="Delete selected node" className={`${!selectedNode ? 'cursor-not-allowed opacity-60 bg-red-200 text-red-400' : 'bg-red-600 hover:bg-red-700 text-white'} inline-flex items-center gap-2 px-3 py-1.5`}>
-                      <TrashIcon className="w-4 h-4" />
-                      <span>Delete</span>
-                    </Button>
-                  </div>
-                </div>
-
-                  <ReactFlow
-                  nodes={nodes}
-                  edges={edges}
-                  nodeTypes={nodeTypes}
-                  onNodesChange={onNodesChange}
-                  onEdgesChange={onEdgesChange}
-                  onConnect={onConnect}
-                  onNodesDelete={onNodesDelete}
-                  onEdgesDelete={onEdgesDelete}
-                  onNodeClick={onNodeClick}
-                  fitView
-                  className="w-full h-full"
-                >
-                  <Background />
-                  <Controls />
-                  <MiniMap />
-                </ReactFlow>
+                <button className="btn btn-danger" onClick={deleteSelected} disabled={!selectedNode} title="Delete selected node">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 6h18" stroke="white" strokeWidth="1.6" strokeLinecap="round"/><path d="M8 6v12" stroke="white" strokeWidth="1.6" strokeLinecap="round"/><path d="M16 6v12" stroke="white" strokeWidth="1.6" strokeLinecap="round"/></svg>
+                  <span>Delete</span>
+                </button>
               </div>
-              <div className="flex-1 flex gap-3 p-3 overflow-auto border-t bg-white">
-                <div className="flex-1 border border-gray-200 p-2 rounded bg-white overflow-auto">
-                  <h4 className="mt-0 mb-2 text-sm font-semibold">Review Queue</h4>
-                  <ReviewQueue items={reviewItems} onUpdate={(items) => setReviewItems(items)} />
-                </div>
-              </div>
-            </div>
-            <div className="w-[360px] border-l border-gray-200 p-3 bg-white rounded flex flex-col">
-              <div className="flex gap-2 mb-3">
-                <Button variant={rightView === 'node' ? 'primary' : 'ghost'} onClick={() => setRightView('node')} className="inline-flex items-center gap-2 px-2 py-0.5 text-sm">
-                  <PencilSquareIcon className="w-4 h-4" />
-                  <span>Node Editor</span>
-                </Button>
+            </Panel>
+          </ReactFlow>
+        </div>
 
-                <Button variant={rightView === 'results' ? 'primary' : 'ghost'} onClick={() => setRightView('results')} className="inline-flex items-center gap-2 px-2 py-0.5 text-sm">
-                  <DocumentTextIcon className="w-4 h-4" />
-                  <span>Annotation Results</span>
-                </Button>
-              </div>
+        <ConfirmModal open={confirm.open} title="Delete node" message={confirm.message} onConfirm={handleConfirmDelete} onCancel={handleConfirmCancel} />
 
-              <div className="flex-1 overflow-auto">
-                {rightView === 'node' && (
-                  <div>
-                    <h3 className="mt-0 text-lg font-semibold">Node Editor</h3>
-                    {selectedNode ? (
-                      <NodeEditor node={selectedNode} updateNodeData={updateNodeData} deleteNode={deleteNodeById} openConfirm={(id, message) => setConfirm({ open: true, targetId: id, message })} />
-                    ) : (
-                      <div className="text-gray-600">Select a node to edit its params</div>
-                    )}
-                  </div>
-                )}
-
-                {/* Review Queue moved under canvas */}
-
-                {rightView === 'results' && (
-                  <div>
-                      <div className="flex justify-between items-center mt-0 mb-3">
-                        <span className="text-lg font-semibold">Annotation Results</span>
-                        <Button variant="ghost" onClick={() => {
-                          try {
-                            const blob = new Blob([JSON.stringify({ run_id: latestRunId, outputs: runResults }, null, 2)], { type: 'application/json' });
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = `run_outputs_${latestRunId || 'latest'}.json`;
-                            document.body.appendChild(a);
-                            a.click();
-                            a.remove();
-                            URL.revokeObjectURL(url);
-                          } catch (e) { console.error('download failed', e); }
-                        }} className="inline-flex items-center gap-2 px-3 py-1">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 3v12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/><path d="M8 11l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                          <span>Download JSON</span>
-                        </Button>
-                    </div>
-
-                    {(!displayResults || Object.keys(displayResults).length === 0) && (<div>No outputs</div>)}
-                    {displayResults && Object.keys(displayResults).length > 0 && (
-                      <div>
-                        {Object.entries(displayResults).map(([nodeId, out]) => {
-                          const node = nodes.find((n) => n.id === nodeId);
-                          let title = node ? (node.data && node.data.label) || nodeId : nodeId;
-                          try {
-                            const nlabel = node && node.data && node.data.label;
-                            if (nlabel === 'Output') title = 'Annotated';
-                          } catch (e) {}
-                          const rows = Array.isArray(out) ? out : (out && out.items) ? out.items : [out];
-                          const getOriginal = (s) => (s && (s.question || s.text || s.input || s.source || s.context)) || (s && (s.id || s.qid)) || (typeof s === 'string' ? s : '');
-                          const getAnnotation = (s) => (s && (s.annotation || s.prediction || s.answer || s.output)) || '';
-
-                          return (
-                            <div key={nodeId} className="mb-3">
-                              <div className="font-semibold">{title} — {rows.length} items</div>
-                              <div className="flex flex-col gap-2 mt-2">
-                                {rows.map((r, i) => (
-                                  <div key={i} className="border border-gray-200 p-2 rounded bg-gray-50 flex gap-3 items-start">
-                                    <div className="flex-1">
-                                      <div className="text-sm font-semibold mb-1">{getOriginal(r) || `item ${i}`}</div>
-                                      <div className="text-sm text-slate-900"><strong>Annotation:</strong> {getAnnotation(r) || '(none)'}</div>
-                                      {r.confidence !== undefined && (<div className="text-xs text-gray-500 mt-1">Confidence: {Number(r.confidence).toFixed(3)}</div>)}
-                                      {r.notes && (<div className="text-xs text-gray-500 mt-1">Notes: {r.notes}</div>)}
-                                    </div>
-                                    <div className="w-[120px]" />
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <ConfirmModal open={confirm.open} title="Delete node" message={confirm.message} onConfirm={handleConfirmDelete} onCancel={handleConfirmCancel} />
-
-        </ReactFlowProvider>
-      </div>
+        <div style={{ width: 320, borderLeft: '1px solid #ddd', padding: 8 }}>
+          <h3>Node Editor</h3>
+          {selectedNode ? (
+            <NodeEditor node={selectedNode} updateNodeData={updateNodeData} deleteNode={deleteNodeById} openConfirm={(id, message) => setConfirm({ open: true, targetId: id, message })} />
+          ) : (
+            <div>Select a node to edit its params</div>
+          )}
+          <ReviewQueue items={reviewItems} onUpdate={(items) => setReviewItems(items)} />
+          <CompletedSamples />
+        </div>
+      </ReactFlowProvider>
     </div>
   );
 }

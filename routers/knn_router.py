@@ -10,7 +10,7 @@ from base_structure.base_router import BaseRouter
 
 class KNNRouter(BaseRouter):
     """KNN-based router using historical annotated samples."""
-    def __init__(self, annotator, candidate_llms, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", k: int = 5, device: Optional[str] = None, train_budget: int = 5):
+    def __init__(self, annotator, candidate_llms, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", k: int = 5, device: Optional[str] = None, train_budget: int = 50):
         # annotator and candidate_llms are required for router cold-start
         self.annotator = annotator
         self.candidate_llms = candidate_llms
@@ -32,22 +32,9 @@ class KNNRouter(BaseRouter):
         return True
 
     def _encode_texts(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
-        """Converts texts into vector embeddings using pooled output or masked mean pooling."""
         all_embs = []
-        total = len(texts)
-        processed = 0
         for i in range(0, len(texts), batch_size):
             batch = texts[i: i + batch_size]
-            processed += len(batch)
-            # progress callback if available
-            try:
-                if hasattr(self, 'progress_cb') and callable(getattr(self, 'progress_cb')):
-                    try:
-                        self.progress_cb(processed, total, {'phase': 'encode'})
-                    except Exception:
-                        pass
-            except Exception:
-                pass
             enc = self.tokenizer(batch, padding=True, truncation=True, return_tensors="pt")
             enc = {k: v.to(self.device) for k, v in enc.items()}
             with torch.no_grad():
@@ -68,9 +55,6 @@ class KNNRouter(BaseRouter):
         return np.vstack(all_embs)
 
     def score(self, sample: str, candidate_llms: List[str]) -> List[Dict[str, Any]]:
-        """Compute routing scores for candidate models given a new input sample,
-        based on similarity to past routed samples. Aggregate routed model votes of top-k nearest neighbors and 
-        return ranked list of candidate models with normalized routing scores."""
         if self.sample_embs is None or len(self.sample_embs) == 0:
             sample_words = set(sample.lower().split())
             scores = []
