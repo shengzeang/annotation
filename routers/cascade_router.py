@@ -11,6 +11,7 @@ class CascadeRouter(BaseRouter):
     """
     def __init__(self, judge_llm, candidate_llm, llm_dict, threshold=0.7):
         self.model_order = candidate_llm
+        self.candidate_llms = candidate_llm
         self.judge = judge_llm
         self.llm_dict = llm_dict
         self.threshold = threshold
@@ -18,6 +19,10 @@ class CascadeRouter(BaseRouter):
     @property
     def if_train(self):
         return False
+
+    def build_from_annotations(self, annotations, out_dir: str = "./"):
+        """No-op: CascadeRouter does not require an offline training phase."""
+        pass
 
     def evaluate(self, query, answer):
         """Use judge LLM to score answer quality."""

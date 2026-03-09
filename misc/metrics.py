@@ -8,7 +8,7 @@ def compute_bleu(reference: str, hypothesis: str) -> float:
     ref = [list(reference)]
     hyp = list(hypothesis)
     smoothie = SmoothingFunction().method1
-    return sentence_bleu(ref, hyp, smoothing_function=smoothie)
+    return float(sentence_bleu(ref, hyp, smoothing_function=smoothie))
 
 def compute_rouge(reference: str, hypothesis: str) -> dict:
     """计算ROUGE-1/2/L分数"""
