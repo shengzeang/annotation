@@ -2,57 +2,184 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Custom base tweaks (Gradio-like tokens) */
+/* ─── Design tokens ─────────────────────────────────────────── */
 :root{
-  --app-bg: #f5f7fa;
-  --card: #ffffff;
-  --muted: #6b7280;
-  --accent: linear-gradient(90deg,#7c3aed 0%,#06b6d4 100%);
-  --accent-solid: #7c3aed;
-  --radius: 14px;
-  --panel-shadow: 0 8px 30px rgba(2,6,23,0.06);
+  --app-bg: #f0f2f5;
+  --surface: #ffffff;
+  --sidebar-bg: #1e293b;
+  --sidebar-text: #e2e8f0;
+  --sidebar-muted: #94a3b8;
+  --accent: #6366f1;
+  --accent-hover: #4f46e5;
+  --accent-light: #eef2ff;
+  --danger: #ef4444;
+  --danger-light: #fef2f2;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --border: rgba(15,23,42,0.09);
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --shadow-sm: 0 1px 3px rgba(2,6,23,0.08), 0 1px 2px rgba(2,6,23,0.04);
+  --shadow: 0 4px 16px rgba(2,6,23,0.08), 0 2px 6px rgba(2,6,23,0.04);
+  --shadow-lg: 0 10px 40px rgba(2,6,23,0.10), 0 4px 16px rgba(2,6,23,0.06);
 }
 
-html,body,#root{height:100%;}
-body{@apply bg-[var(--app-bg)] text-slate-900 font-sans}
+html,body,#root{ height:100%; margin:0; }
+body{
+  @apply font-sans antialiased text-slate-800;
+  background: var(--app-bg);
+  font-family: 'Inter', 'Segoe UI', ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
 
-/* Example component utilities using Tailwind classes for convenience */
-.app-shell{@apply min-h-screen flex gap-4}
-.sidebar{@apply w-60 p-4 bg-white rounded-[var(--radius)] shadow-[var(--panel-shadow)]}
-.canvas-wrap{@apply flex-1 flex flex-col}
-.canvas-topbar{@apply flex items-center justify-between p-3}
-.right-panel{@apply w-96 p-4}
-.card{@apply bg-[var(--card)] rounded-[var(--radius)] p-4 shadow-[var(--panel-shadow)]}
-.btn{@apply inline-flex items-center gap-2 px-4 py-2 rounded-full font-semibold}
+/* ─── Shared card ────────────────────────────────────────────── */
+.card{
+  background: var(--surface);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ─── Buttons ────────────────────────────────────────────────── */
+.btn{
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.4;
+  transition: background 0.14s ease, box-shadow 0.14s ease, transform 0.12s ease, opacity 0.14s ease;
+  white-space: nowrap;
+  user-select: none;
+}
+.btn:active{ transform: translateY(1px); }
+.btn:disabled{ opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+
 .btn-primary{
-  @apply text-white;
   background: var(--accent);
-  background-size: 200% 200%;
-  border: none;
-  box-shadow: 0 10px 30px rgba(124,58,237,0.12);
-  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 2px 8px rgba(99,102,241,0.22);
 }
-.btn-primary:hover{ transform: translateY(-1px) scale(1.02); filter: brightness(1.04); box-shadow: 0 12px 36px rgba(124,58,237,0.16) }
-.btn-ghost{@apply bg-transparent text-slate-900}
+.btn-primary:hover{
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  box-shadow: 0 4px 14px rgba(99,102,241,0.28);
+}
 
-/* Compact node styling using CSS variables for dynamic colors */
-.compact-node{
-  padding: 10px;
-  border-radius: 10px;
-  min-width: 140px;
-  box-shadow: 0 6px 20px rgba(2,6,23,0.06);
+.btn-secondary{
+  background: var(--surface);
+  color: #374151;
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
+}
+.btn-secondary:hover{ background: #f9fafb; }
+
+.btn-ghost{
+  background: transparent;
+  color: #374151;
+  border-color: transparent;
+}
+.btn-ghost:hover{ background: #f3f4f6; }
+
+.btn-danger{
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+  box-shadow: 0 2px 8px rgba(239,68,68,0.2);
+}
+.btn-danger:hover{ background: #dc2626; border-color: #dc2626; }
+
+/* ─── Top toolbar ─────────────────────────────────────────────── */
+.panel-actions{
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  border: 1px solid rgba(15,23,42,0.04);
-  background: var(--bg, #fff);
+  gap: 6px;
+  align-items: center;
+  background: var(--surface);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
 }
-.compact-node .title{font-size:13px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:8px}
-.compact-node .summary{font-size:12px;color:#334155}
-.compact-node .progress-container{height:8px;background:#eee;border-radius:4px;overflow:hidden;margin-top:6px}
-.compact-node .progress-inner{height:100%;width:var(--pct,0%);background:var(--accent, #999);border-radius:4px;transition:width 200ms linear}
 
-/* Small responsive tweaks */
+/* ─── Compact node (ReactFlow) ──────────────────────────────── */
+.compact-node{
+  background: var(--surface);
+  border-radius: var(--radius);
+  min-width: 160px;
+  max-width: 220px;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  border: 1.5px solid var(--border);
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+.compact-node:hover{
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-1px);
+}
+.compact-node.selected{
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.18), var(--shadow-lg);
+}
+.node-accent-bar{
+  height: 4px;
+  width: 100%;
+}
+.node-body{ padding: 10px 12px 12px 12px; }
+.node-title{
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  letter-spacing: -0.01em;
+}
+.node-icon{
+  width: 20px; height: 20px;
+  border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.node-summary{
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+.node-progress{
+  margin-top: 8px;
+}
+.node-progress-bar{
+  height: 4px;
+  background: #e2e8f0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.node-progress-fill{
+  height: 100%;
+  border-radius: 4px;
+  transition: width 200ms linear;
+}
+.node-progress-text{
+  font-size: 10px;
+  color: #94a3b8;
+  margin-top: 3px;
+}
+
+/* ReactFlow overrides */
+.react-flow__node{ transition: opacity 150ms ease; }
+.react-flow__edge-path{ stroke-width: 2; }
+.react-flow__handle{
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+}
+
+/* ─── Small responsive tweaks ──────────────────────────────── */
 @media (max-width: 960px){
-  .sidebar{display:none}
+  .sidebar-panel{ display: none; }
 }

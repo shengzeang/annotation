@@ -18,71 +18,30 @@ import ReviewQueue from './components/ReviewQueue';
 import CompletedSamples from './components/CompletedSamples';
 import axios from 'axios';
 
+// ─── Initial graph ────────────────────────────────────────────
 const initialNodes = [
-  // Starting nodes
-  {
-    id: 'n1',
-    type: 'compact',
-    position: { x: 40, y: 60 },
-    data: { label: 'LoadData', params: { dataset: 'squad', max_samples: 200 } },
-  },
-  {
-    id: 'n2',
-    type: 'compact',
-    position: { x: 40, y: 200 },
-    data: { label: 'Task', params: { task_class: 'tasks.qa.QATask' } },
-  },
-  {
-    id: 'n3',
-    type: 'compact',
-    position: { x: 40, y: 340 },
-    data: { label: 'CandidateLLMs', params: { candidate_llms: ['gpt2', 'distilgpt2'] } },
-  },
+  { id: 'n1', type: 'compact', position: { x: 40, y: 60 },  data: { label: 'LoadData',      params: { dataset: 'squad', max_samples: 200 } } },
+  { id: 'n2', type: 'compact', position: { x: 40, y: 200 }, data: { label: 'Task',           params: { task_class: 'tasks.qa.QATask' } } },
+  { id: 'n3', type: 'compact', position: { x: 40, y: 340 }, data: { label: 'CandidateLLMs', params: { candidate_llms: ['gpt2', 'distilgpt2'] } } },
+  { id: 'n4', type: 'compact', position: { x: 280, y: 200 }, data: { label: 'Filter',    params: { filter_class: 'filters.al_filter.ActiveLearningFilter', filter_params: { method: 'alps', budget: 100, batch_size: 20 } } } },
+  { id: 'n5', type: 'compact', position: { x: 500, y: 200 }, data: { label: 'Router',    params: { router_class: 'routers.knn_router.KNNRouter', router_params: { k: 5 }, candidate_llms: ['gpt2', 'distilgpt2'] } } },
+  { id: 'n6', type: 'compact', position: { x: 720, y: 200 }, data: { label: 'Annotate',  params: { candidate_llms: ['gpt2', 'distilgpt2'], llm_mode: 'local', task_class: 'tasks.qa.QATask' } } },
+  { id: 'n7', type: 'compact', position: { x: 940, y: 200 }, data: { label: 'Output',    params: { path: 'out/annotations.json' } } },
+];
 
-  // Pipeline nodes
-  {
-    id: 'n4',
-    type: 'compact',
-    position: { x: 260, y: 200 },
-    data: { label: 'Filter', params: { filter_class: 'filters.al_filter.ActiveLearningFilter', filter_params: { method: 'alps', budget: 100, batch_size: 20 } } },
-  },
-  {
-    id: 'n5',
-    type: 'compact',
-    position: { x: 460, y: 200 },
-    data: { label: 'Router', params: { router_class: 'routers.knn_router.KNNRouter', router_params: { k: 5 }, candidate_llms: ['gpt2', 'distilgpt2'] } },
-  },
-  {
-    id: 'n6',
-    type: 'compact',
-    position: { x: 660, y: 200 },
-    data: { label: 'Annotate', params: { candidate_llms: ['gpt2', 'distilgpt2'], llm_mode: 'local', task_class: 'tasks.qa.QATask' } },
-  },
-  {
-    id: 'n7',
-    type: 'compact',
-    position: { x: 860, y: 200 },
-    data: { label: 'Output', params: { path: 'out/annotations.json' } },
-  }
+const initialEdges = [
+  { id: 'e1-4', source: 'n1', target: 'n4', style: { strokeWidth: 2 } },
+  { id: 'e4-5', source: 'n4', target: 'n5', style: { strokeWidth: 2 } },
+  { id: 'e5-6', source: 'n5', target: 'n6', style: { strokeWidth: 2 } },
+  { id: 'e6-7', source: 'n6', target: 'n7', style: { strokeWidth: 2 } },
+  { id: 'e3-5', source: 'n3', target: 'n5', style: { strokeWidth: 2, strokeDasharray: '5,4' } },
+  { id: 'e3-6', source: 'n3', target: 'n6', style: { strokeWidth: 2, strokeDasharray: '5,4' } },
+  { id: 'e2-6', source: 'n2', target: 'n6', style: { strokeWidth: 2, strokeDasharray: '5,4' } },
 ];
 
 const nodeTypes = { compact: CompactNode };
 
-// Connect starting nodes into the pipeline:
-// LoadData -> Filter -> Router -> Annotate -> Output
-// CandidateLLMs -> Router and CandidateLLMs -> Annotate
-// Task -> Annotate
-const initialEdges = [
-  { id: 'e1-4', source: 'n1', target: 'n4' },
-  { id: 'e4-5', source: 'n4', target: 'n5' },
-  { id: 'e5-6', source: 'n5', target: 'n6' },
-  { id: 'e6-7', source: 'n6', target: 'n7' },
-
-  { id: 'e3-5', source: 'n3', target: 'n5' },
-  { id: 'e3-6', source: 'n3', target: 'n6' },
-  { id: 'e2-6', source: 'n2', target: 'n6' },
-];
-
+// ─── App ──────────────────────────────────────────────────────
 export default function App() {
   const [nodes, setNodes] = useState(initialNodes);
   const [edges, setEdges] = useState(initialEdges);
@@ -90,19 +49,20 @@ export default function App() {
   const [prevNodes, setPrevNodes] = useState(null);
   const [undoStack, setUndoStack] = useState([]);
   const [reviewItems, setReviewItems] = useState([]);
+  const [rightTab, setRightTab] = useState('editor'); // 'editor' | 'review' | 'completed'
+  const [confirm, setConfirm] = useState({ open: false, targetId: null, message: '' });
+  const [running, setRunning] = useState(false);
 
-  // load persisted review queue on mount
+  // Load persisted review queue
   React.useEffect(() => {
     let mounted = true;
     const fetchServerQueue = async () => {
       try {
         const res = await axios.get('http://localhost:5000/review_submissions');
         if (!mounted) return;
-        if (res.data && res.data.status === 'ok') {
+        if (res.data?.status === 'ok') {
           const serverItems = (res.data.items || []).map((it) => ({ ...it, _server: true }));
-          // merge: keep run-only items (those with _server !== true) and add/replace server items
           setReviewItems((cur) => {
-            // helper to compare
             const same = (a, b) => {
               if (!a || !b) return false;
               if (a.id && b.id && a.id === b.id) return true;
@@ -112,55 +72,32 @@ export default function App() {
               return false;
             };
             const runOnly = (cur || []).filter((x) => !x._server);
-            // for serverItems, prefer server copy; avoid duplicates
             const merged = [...serverItems];
-            runOnly.forEach((r) => {
-              const exists = merged.find((s) => same(s, r));
-              if (!exists) merged.push(r);
-            });
+            runOnly.forEach((r) => { if (!merged.find((s) => same(s, r))) merged.push(r); });
             return merged;
           });
         }
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) { /* server may not be running */ }
     };
-
-    // initial fetch
     fetchServerQueue();
-    // poll every 10s
     const iv = setInterval(fetchServerQueue, 10000);
     return () => { mounted = false; clearInterval(iv); };
   }, []);
 
-  // push a snapshot of current nodes+edges to undo stack (cap at 10 entries)
+  // Snapshot management
   const pushSnapshot = React.useCallback(() => {
     setUndoStack((s) => {
-      const next = [
-        ...s,
-        {
-          nodes: nodes.map((n) => ({ ...n })),
-          edges: edges.map((e) => ({ ...e })),
-        },
-      ];
-      if (next.length > 10) return next.slice(next.length - 10);
-      return next;
+      const next = [...s, { nodes: nodes.map((n) => ({ ...n })), edges: edges.map((e) => ({ ...e })) }];
+      return next.length > 10 ? next.slice(next.length - 10) : next;
     });
   }, [nodes, edges]);
 
   const onNodesChange = useCallback((changes) => setNodes((nds) => applyNodeChanges(changes, nds)), []);
   const onEdgesChange = useCallback((changes) => setEdges((eds) => applyEdgeChanges(changes, eds)), []);
-  const onConnect = useCallback((params) => {
-    // snapshot before adding an edge so it can be undone
-    pushSnapshot();
-    setEdges((eds) => addEdge(params, eds));
-  }, [pushSnapshot]);
 
-  const onElementsRemove = useCallback((elementsToRemove) => {
+  const onConnect = useCallback((params) => {
     pushSnapshot();
-    const removeIds = new Set(elementsToRemove.map((el) => el.id));
-    setNodes((nds) => nds.filter((n) => !removeIds.has(n.id)));
-    setEdges((eds) => eds.filter((e) => !removeIds.has(e.id) && !removeIds.has(e.source) && !removeIds.has(e.target)));
+    setEdges((eds) => addEdge({ ...params, style: { strokeWidth: 2 } }, eds));
   }, [pushSnapshot]);
 
   const onNodesDelete = useCallback((nodesToDelete) => {
@@ -178,190 +115,126 @@ export default function App() {
 
   const onNodeClick = useCallback((event, node) => {
     setSelectedNode(node);
+    setRightTab('editor');
   }, []);
 
   const deleteNodeById = useCallback((id) => {
     if (!id) return;
-    // push snapshot for undo
     pushSnapshot();
     setNodes((nds) => nds.filter((n) => n.id !== id));
     setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id && e.id !== id));
-    setSelectedNode((cur) => (cur && cur.id === id ? null : cur));
+    setSelectedNode((cur) => (cur?.id === id ? null : cur));
   }, [pushSnapshot]);
 
   const deleteSelected = useCallback(() => {
     if (!selectedNode) return;
-    // show confirmation modal instead of deleting immediately
     setConfirm({ open: true, targetId: selectedNode.id, message: `Delete node "${selectedNode.data?.label || selectedNode.id}"?` });
-  }, [selectedNode, deleteNodeById]);
+  }, [selectedNode]);
 
-  const [confirm, setConfirm] = React.useState({ open: false, targetId: null, message: '' });
-
-  const handleConfirmCancel = () => setConfirm({ open: false, targetId: null, message: '' });
-  const handleConfirmDelete = () => {
-    if (confirm && confirm.targetId) deleteNodeById(confirm.targetId);
-    setConfirm({ open: false, targetId: null, message: '' });
-  };
-
-  // Note: keyboard Delete/Backspace handler removed — deletions happen via Delete button only
-
-  const handleRun = async () => {
-    const payload = { nodes, edges };
-    try {
-      const res = await axios.post('http://localhost:5000/run_graph', payload);
-      alert('Run completed, check console for output.');
-      console.log('Run result:', res.data);
-      // extract human-review items from result context/outputs
-      try {
-        const ctx = res.data.context || res.data.outputs || {};
-        const found = [];
-        Object.values(ctx).forEach((val) => {
-          if (Array.isArray(val)) {
-            val.forEach((it) => { if (it && it.needs_human) found.push({ ...it, _server: false }); });
-          }
-        });
-        // merge with current reviewItems (server items kept)
-        setReviewItems((cur) => {
-          const same = (a, b) => {
-            if (!a || !b) return false;
-            if (a.id && b.id && a.id === b.id) return true;
-            if (a.qid && b.qid && a.qid === b.qid) return true;
-            if (a.question && b.question && a.question === b.question) return true;
-            if (a.text && b.text && a.text === b.text) return true;
-            return false;
-          };
-          const curServer = (cur || []).filter((x) => x && x._server) || [];
-          const runOnly = found.filter((f) => !curServer.find((s) => same(s, f)));
-          return [...curServer, ...runOnly];
-        });
-      } catch (e) {
-        console.error('Failed to extract review items', e);
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Run failed: ' + err.message);
+  const handleUndo = useCallback(() => {
+    if (undoStack?.length > 0) {
+      const last = undoStack[undoStack.length - 1];
+      setNodes(last.nodes.map((n) => ({ ...n })));
+      setEdges(last.edges.map((e) => ({ ...e })));
+      setUndoStack((s) => s.slice(0, -1));
+      setSelectedNode(null);
+    } else if (prevNodes) {
+      setNodes(prevNodes.map((n) => ({ ...n })));
+      setPrevNodes(null);
     }
-  };
+  }, [undoStack, prevNodes]);
 
   const compactLayout = useCallback(() => {
-    // Save previous node positions so layout can be undone
     setPrevNodes(nodes.map((n) => ({ ...n })));
-    // Smart compact layout:
-    // 1. Try to compute node layers via a topological-like pass using edges (sources -> targets)
-    // 2. If graph has cycles or topological layering doesn't reach all nodes, fallback to grouping by node label types
-    // 3. Place nodes column-by-column according to layer, with compact vertical spacing
     const nodeMap = new Map(nodes.map((n) => [n.id, { ...n, layer: 0 }]));
-
-    // build adjacency and in-degree
-    const adj = new Map();
-    const inDegree = new Map();
-    nodes.forEach((n) => {
-      adj.set(n.id, []);
-      inDegree.set(n.id, 0);
-    });
+    const adj = new Map(); const inDegree = new Map();
+    nodes.forEach((n) => { adj.set(n.id, []); inDegree.set(n.id, 0); });
     edges.forEach((e) => {
       if (!adj.has(e.source)) adj.set(e.source, []);
       adj.get(e.source).push(e.target);
       inDegree.set(e.target, (inDegree.get(e.target) || 0) + 1);
     });
-
-    // Kahn-like processing to compute layers
-    const q = [];
-    inDegree.forEach((deg, id) => { if (deg === 0) q.push(id); });
+    const q = []; inDegree.forEach((deg, id) => { if (deg === 0) q.push(id); });
     let processed = 0;
     while (q.length) {
-      const id = q.shift();
-      processed += 1;
+      const id = q.shift(); processed++;
       const node = nodeMap.get(id);
-      const neighbors = adj.get(id) || [];
-      neighbors.forEach((nb) => {
+      (adj.get(id) || []).forEach((nb) => {
         const nbNode = nodeMap.get(nb);
         if (nbNode) nbNode.layer = Math.max(nbNode.layer, node.layer + 1);
         inDegree.set(nb, inDegree.get(nb) - 1);
         if (inDegree.get(nb) === 0) q.push(nb);
       });
     }
-
-    // If not all nodes processed (cycle), fallback to grouping by label order
     if (processed < nodes.length) {
-      const labelOrder = {
-        LoadData: 0,
-        Task: 1,
-        CandidateLLMs: 2,
-        Filter: 3,
-        Router: 4,
-        Annotate: 5,
-        Output: 6,
-      };
-      nodes.forEach((n) => {
-        const label = n.data && n.data.label ? n.data.label : '';
-        const ord = labelOrder[label] !== undefined ? labelOrder[label] : 10;
-        nodeMap.get(n.id).layer = ord;
-      });
+      const order = { LoadData: 0, Task: 1, CandidateLLMs: 2, Filter: 3, Router: 4, Annotate: 5, Output: 6 };
+      nodes.forEach((n) => { nodeMap.get(n.id).layer = order[n.data?.label] ?? 10; });
     }
-
-    // Group nodes by layer
     const layers = [];
-    nodeMap.forEach((n) => {
-      const l = n.layer || 0;
-      if (!layers[l]) layers[l] = [];
-      layers[l].push(n);
-    });
-
-    const startX = 40;
-    const spacingX = 200;
-    const spacingY = 88;
-    const baseY = 100;
-
-    // Normalize: compact each layer vertically
+    nodeMap.forEach((n) => { const l = n.layer || 0; if (!layers[l]) layers[l] = []; layers[l].push(n); });
     const newNodes = nodes.map((n) => {
       const nObj = nodeMap.get(n.id);
       const layer = nObj.layer || 0;
       const column = layers[layer] || [];
       const index = column.findIndex((c) => c.id === n.id);
-      const x = startX + layer * spacingX;
-      const y = baseY + index * spacingY;
-      return { ...n, position: { x, y } };
+      return { ...n, position: { x: 40 + layer * 220, y: 80 + index * 100 } };
     });
-
     setNodes(newNodes);
-  }, [nodes, edges, setNodes]);
-
-  const undoLayout = useCallback(() => {
-    if (prevNodes) {
-      setNodes(prevNodes.map((n) => ({ ...n })));
-      setPrevNodes(null);
-    }
-  }, [prevNodes, setNodes]);
-
-  const handleUndo = useCallback(() => {
-    // If we have undo history (deletes/edits), restore last snapshot
-    if (undoStack && undoStack.length > 0) {
-      const last = undoStack[undoStack.length - 1];
-      setNodes(last.nodes.map((n) => ({ ...n })));
-      setEdges(last.edges.map((e) => ({ ...e })));
-      setUndoStack((s) => s.slice(0, -1));
-      setSelectedNode(null);
-      return;
-    }
-    // Otherwise fall back to layout undo
-    undoLayout();
-  }, [undoStack, setNodes, setEdges, setUndoStack, undoLayout]);
+  }, [nodes, edges]);
 
   const updateNodeData = (id, data) => {
-    // snapshot before editing node params so it can be undone
     pushSnapshot();
     setNodes((nds) => nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...data } } : n)));
     const n = nodes.find((x) => x.id === id);
     setSelectedNode(n ? { ...n, data: { ...n.data, ...data } } : null);
   };
 
-  return (
-    <div style={{ height: '100vh', display: 'flex' }}>
-      <ReactFlowProvider>
-        <Sidebar setNodes={setNodes} setEdges={setEdges} nodes={nodes} />
+  const handleRun = async () => {
+    setRunning(true);
+    try {
+      const res = await axios.post('http://localhost:5000/run_graph', { nodes, edges });
+      console.log('Run result:', res.data);
+      // Extract human-review items
+      const ctx = res.data?.context || res.data?.outputs || {};
+      const found = [];
+      Object.values(ctx).forEach((val) => {
+        if (Array.isArray(val)) val.forEach((it) => { if (it?.needs_human) found.push({ ...it, _server: false }); });
+      });
+      if (found.length) {
+        setReviewItems((cur) => {
+          const same = (a, b) => {
+            if (!a || !b) return false;
+            if (a.id && b.id && a.id === b.id) return true;
+            if (a.qid && b.qid && a.qid === b.qid) return true;
+            if (a.question && b.question && a.question === b.question) return true;
+            return a.text && b.text && a.text === b.text;
+          };
+          const curServer = (cur || []).filter((x) => x?._server);
+          const runOnly = found.filter((f) => !curServer.find((s) => same(s, f)));
+          return [...curServer, ...runOnly];
+        });
+        setRightTab('review');
+      }
+      alert('Pipeline run completed.');
+    } catch (err) {
+      console.error(err);
+      alert('Run failed: ' + err.message);
+    } finally {
+      setRunning(false);
+    }
+  };
 
-        <div style={{ flex: 1 }}>
+  const canUndo = !!(prevNodes || undoStack?.length > 0);
+
+  return (
+    <div style={{ height: '100vh', display: 'flex', overflow: 'hidden', background: '#f0f2f5' }}>
+      <ReactFlowProvider>
+
+        {/* ── Left sidebar (palette) ── */}
+        <Sidebar setNodes={setNodes} nodes={nodes} />
+
+        {/* ── Canvas ── */}
+        <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -373,29 +246,86 @@ export default function App() {
             onEdgesDelete={onEdgesDelete}
             onNodeClick={onNodeClick}
             fitView
+            fitViewOptions={{ padding: 0.2 }}
+            deleteKeyCode={null}
           >
-            <Background />
+            <Background color="#c7d2fe" gap={20} size={1} style={{ opacity: 0.4 }} />
             <Controls />
-            <MiniMap />
+            <MiniMap
+              nodeColor={(node) => {
+                const colors = { LoadData: '#3b82f6', Task: '#f97316', CandidateLLMs: '#8b5cf6', Filter: '#22c55e', Router: '#ec4899', Annotate: '#f59e0b', Output: '#14b8a6' };
+                return colors[node.data?.label] || '#94a3b8';
+              }}
+              style={{ background: '#fff', borderRadius: 10, border: '1px solid rgba(15,23,42,0.08)' }}
+            />
+
+            {/* Toolbar */}
             <Panel position="top-left">
               <div className="panel-actions">
-                <button className="btn btn-primary" onClick={handleRun} title="Run the current graph">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 3v18l15-9L5 3z" fill="white"/></svg>
-                  <span>Run Graph</span>
+                {/* Run */}
+                <button
+                  className="btn btn-primary"
+                  onClick={handleRun}
+                  disabled={running}
+                  title="Run the pipeline"
+                >
+                  {running ? (
+                    <>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" className="spin-icon">
+                        <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" strokeWidth="2.5"/>
+                        <path d="M12 2a10 10 0 0 1 10 10" stroke="#fff" strokeWidth="2.5" strokeLinecap="round"/>
+                      </svg>
+                      <span>Running…</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="white">
+                        <path d="M5 3v18l15-9L5 3z"/>
+                      </svg>
+                      <span>Run Pipeline</span>
+                    </>
+                  )}
                 </button>
 
-                <button className="btn btn-secondary" onClick={compactLayout} title="Rearrange nodes compactly">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 2v20" stroke="#0f172a" strokeWidth="1.6" strokeLinecap="round"/></svg>
-                  <span>Compact</span>
+                <div style={{ width: 1, height: 20, background: 'rgba(15,23,42,0.1)', margin: '0 2px' }} />
+
+                {/* Compact layout */}
+                <button className="btn btn-secondary" onClick={compactLayout} title="Auto-arrange nodes">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                    <rect x="3" y="3" width="6" height="6" rx="1.5" stroke="#374151" strokeWidth="2"/>
+                    <rect x="15" y="3" width="6" height="6" rx="1.5" stroke="#374151" strokeWidth="2"/>
+                    <rect x="9" y="15" width="6" height="6" rx="1.5" stroke="#374151" strokeWidth="2"/>
+                    <path d="M6 9v3a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V9" stroke="#374151" strokeWidth="1.8" strokeLinecap="round"/>
+                  </svg>
+                  <span>Layout</span>
                 </button>
 
-                <button className="btn btn-secondary" onClick={handleUndo} disabled={!(prevNodes || (undoStack && undoStack.length > 0))} title="Undo last action (deletes or layout)">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M21 7v6h-6" stroke="#0f172a" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M3 17a9 9 0 0115.9-6.36L21 11" stroke="#0f172a" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                {/* Undo */}
+                <button
+                  className="btn btn-secondary"
+                  onClick={handleUndo}
+                  disabled={!canUndo}
+                  title="Undo last action"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                    <path d="M21 7v6h-6" stroke="#374151" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M3 17a9 9 0 0 1 15.9-6.36L21 11" stroke="#374151" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
                   <span>Undo</span>
                 </button>
 
-                <button className="btn btn-danger" onClick={deleteSelected} disabled={!selectedNode} title="Delete selected node">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 6h18" stroke="white" strokeWidth="1.6" strokeLinecap="round"/><path d="M8 6v12" stroke="white" strokeWidth="1.6" strokeLinecap="round"/><path d="M16 6v12" stroke="white" strokeWidth="1.6" strokeLinecap="round"/></svg>
+                {/* Delete */}
+                <button
+                  className="btn btn-danger"
+                  onClick={deleteSelected}
+                  disabled={!selectedNode}
+                  title="Delete selected node"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                    <path d="M3 6h18" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                    <path d="M8 6V4h8v2" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                    <path d="M19 6l-1 14H6L5 6" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
                   <span>Delete</span>
                 </button>
               </div>
@@ -403,18 +333,85 @@ export default function App() {
           </ReactFlow>
         </div>
 
-        <ConfirmModal open={confirm.open} title="Delete node" message={confirm.message} onConfirm={handleConfirmDelete} onCancel={handleConfirmCancel} />
+        {/* ── Right panel ── */}
+        <div className="right-panel">
+          {/* Tabs */}
+          <div className="right-tabs">
+            <div
+              className={'right-tab' + (rightTab === 'editor' ? ' active' : '')}
+              onClick={() => setRightTab('editor')}
+            >
+              Properties
+            </div>
+            <div
+              className={'right-tab' + (rightTab === 'review' ? ' active' : '')}
+              onClick={() => setRightTab('review')}
+            >
+              Review Queue
+              {reviewItems.length > 0 && (
+                <span style={{ marginLeft: 5, background: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '1px 5px' }}>
+                  {reviewItems.length}
+                </span>
+              )}
+            </div>
+            <div
+              className={'right-tab' + (rightTab === 'completed' ? ' active' : '')}
+              onClick={() => setRightTab('completed')}
+            >
+              Completed
+            </div>
+          </div>
 
-        <div style={{ width: 320, borderLeft: '1px solid #ddd', padding: 8 }}>
-          <h3>Node Editor</h3>
-          {selectedNode ? (
-            <NodeEditor node={selectedNode} updateNodeData={updateNodeData} deleteNode={deleteNodeById} openConfirm={(id, message) => setConfirm({ open: true, targetId: id, message })} />
-          ) : (
-            <div>Select a node to edit its params</div>
+          {/* Tab bodies */}
+          {rightTab === 'editor' && (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              {selectedNode ? (
+                <NodeEditor
+                  node={selectedNode}
+                  updateNodeData={updateNodeData}
+                  deleteNode={deleteNodeById}
+                  openConfirm={(id, message) => setConfirm({ open: true, targetId: id, message })}
+                />
+              ) : (
+                <div style={{ padding: '32px 20px', textAlign: 'center' }}>
+                  <svg width="44" height="44" viewBox="0 0 24 24" fill="none" style={{ margin: '0 auto 12px', display: 'block', opacity: 0.2 }}>
+                    <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="#374151" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M2 17l10 5 10-5" stroke="#374151" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M2 12l10 5 10-5" stroke="#374151" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: '#374151' }}>No node selected</div>
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 5, lineHeight: 1.5 }}>
+                    Click on a node in the canvas to edit its parameters
+                  </div>
+                </div>
+              )}
+            </div>
           )}
-          <ReviewQueue items={reviewItems} onUpdate={(items) => setReviewItems(items)} />
-          <CompletedSamples />
+
+          {rightTab === 'review' && (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <ReviewQueue items={reviewItems} onUpdate={(items) => setReviewItems(items)} />
+            </div>
+          )}
+
+          {rightTab === 'completed' && (
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              <CompletedSamples />
+            </div>
+          )}
         </div>
+
+        {/* Confirm delete modal */}
+        <ConfirmModal
+          open={confirm.open}
+          title="Delete node"
+          message={confirm.message}
+          onConfirm={() => {
+            if (confirm.targetId) deleteNodeById(confirm.targetId);
+            setConfirm({ open: false, targetId: null, message: '' });
+          }}
+          onCancel={() => setConfirm({ open: false, targetId: null, message: '' })}
+        />
       </ReactFlowProvider>
     </div>
   );

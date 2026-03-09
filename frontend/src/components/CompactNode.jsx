@@ -1,152 +1,159 @@
 import React from 'react';
 import { Handle, Position } from 'reactflow';
-import Card from './ui/Card';
 
-function short(s, n = 36) {
-  if (!s && s !== 0) return '';
-  const str = String(s);
-  return str.length > n ? str.slice(0, n - 1) + '…' : str;
-}
+// Color/accent mapping per node type
+const TYPE_META = {
+  LoadData:      { color: '#3b82f6', bg: '#eff6ff' },
+  Task:          { color: '#f97316', bg: '#fff7ed' },
+  CandidateLLMs: { color: '#8b5cf6', bg: '#f5f3ff' },
+  Filter:        { color: '#22c55e', bg: '#f0fdf4' },
+  Router:        { color: '#ec4899', bg: '#fdf2f8' },
+  Annotate:      { color: '#f59e0b', bg: '#fffbeb' },
+  Output:        { color: '#14b8a6', bg: '#f0fdfa' },
+};
 
-function summaryFromData(data) {
-  const label = data?.label || '';
-  const params = data?.params || {};
-  try {
-    if (label.includes('Filter')) {
-      const cls = params.filter_class || params.filter || '';
-      return short(cls.split('.').pop() || cls || 'filter');
-    }
-    if (label.includes('Router')) {
-      const cls = params.router_class || params.router || '';
-      return short(cls.split('.').pop() || cls || 'router');
-    }
-    if (label === 'Task') {
-      const cls = params.task_class || params.task || '';
-      return short(cls.split('.').pop() || cls || 'task');
-    }
-    if (label === 'CandidateLLMs') {
-      const list = params.candidate_llms || params.candidate || [];
-      if (Array.isArray(list)) return short(list.join(', '), 40);
-      return short(list, 40);
-    }
-    if (label === 'LoadData') {
-      const ds = params.dataset || params.samples || '';
-      return short(ds || `max:${params.max_samples || ''}`);
-    }
-    if (label === 'Annotate' || label === 'Annotator') {
-      const task = params.task_class || params.task || '';
-      return short(task ? task.split('.').pop() : '', 40);
-    }
-    if (label === 'Output') {
-      return short(params.path || params.output || 'out');
-    }
-    const keys = Object.keys(params || {});
-    return keys.length ? short(keys.slice(0, 3).join(', ')) : '';
-  } catch (e) {
-    return '';
+function NodeIcon({ label, color }) {
+  switch (label) {
+    case 'LoadData':
+      return (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+          <polyline points="7 10 12 15 17 10" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+          <line x1="12" y1="15" x2="12" y2="3" stroke={color} strokeWidth="2.2" strokeLinecap="round"/>
+        </svg>
+      );
+    case 'Task':
+      return (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+          <rect x="3" y="3" width="18" height="18" rx="3" stroke={color} strokeWidth="2.2"/>
+          <path d="M9 12l2 2 4-4" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      );
+    case 'CandidateLLMs':
+      return (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+          <circle cx="6" cy="6" r="2.5" stroke={color} strokeWidth="2"/>
+          <circle cx="18" cy="6" r="2.5" stroke={color} strokeWidth="2"/>
+          <circle cx="12" cy="18" r="2.5" stroke={color} strokeWidth="2"/>
+          <line x1="6" y1="8.5" x2="12" y2="15.5" stroke={color} strokeWidth="1.5"/>
+          <line x1="18" y1="8.5" x2="12" y2="15.5" stroke={color} strokeWidth="1.5"/>
+        </svg>
+      );
+    case 'Filter':
+      return (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+          <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+        </svg>
+      );
+    case 'Router':
+      return (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+          <circle cx="5" cy="12" r="2" stroke={color} strokeWidth="2"/>
+          <circle cx="19" cy="6" r="2" stroke={color} strokeWidth="2"/>
+          <circle cx="19" cy="18" r="2" stroke={color} strokeWidth="2"/>
+          <path d="M7 12h4l4-5" stroke={color} strokeWidth="1.8" strokeLinecap="round"/>
+          <path d="M7 12h4l4 5" stroke={color} strokeWidth="1.8" strokeLinecap="round"/>
+        </svg>
+      );
+    case 'Annotate':
+      return (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+          <path d="M12 20h9" stroke={color} strokeWidth="2.2" strokeLinecap="round"/>
+          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      );
+    case 'Output':
+      return (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+          <polyline points="17 8 12 3 7 8" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+          <line x1="12" y1="3" x2="12" y2="15" stroke={color} strokeWidth="2.2" strokeLinecap="round"/>
+        </svg>
+      );
+    default:
+      return null;
   }
 }
 
-function typeColor(label) {
-  const map = {
-    LoadData: '#E6F7FF',
-    Task: '#FFF7E6',
-    CandidateLLMs: '#F0F5FF',
-    Filter: '#F6FFED',
-    Router: '#FFF0F6',
-    Annotate: '#FFF9E6',
-    Output: '#F0FFF4',
-  };
-  return map[label] || '#ffffff';
+function truncate(s, n = 28) {
+  if (!s && s !== 0) return '';
+  const str = String(s);
+  return str.length > n ? str.slice(0, n - 1) + '\u2026' : str;
 }
 
-function typeAccent(label) {
-  const map = {
-    LoadData: '#1890FF',
-    Task: '#FA8C16',
-    CandidateLLMs: '#2F54EB',
-    Filter: '#52C41A',
-    Router: '#EB2F96',
-    Annotate: '#D48806',
-    Output: '#13C2C2',
-  };
-  return map[label] || '#999';
+function getSummary(data) {
+  const label = data?.label || '';
+  const p = data?.params || {};
+  try {
+    if (label === 'Filter')         return truncate((p.filter_class || '').split('.').pop() || 'filter');
+    if (label === 'Router')         return truncate((p.router_class || '').split('.').pop() || 'router');
+    if (label === 'Task')           return truncate((p.task_class || '').split('.').pop() || 'task');
+    if (label === 'CandidateLLMs')  return truncate(Array.isArray(p.candidate_llms) ? p.candidate_llms.join(', ') : String(p.candidate_llms || ''), 32);
+    if (label === 'LoadData')       return truncate(p.dataset || ('max: ' + (p.max_samples || '\u2014')));
+    if (label === 'Annotate')       return truncate((p.task_class || '').split('.').pop() || '');
+    if (label === 'Output')         return truncate(p.path || 'output');
+    const keys = Object.keys(p || {});
+    return keys.length ? truncate(keys.slice(0, 3).join(', ')) : '';
+  } catch (e) { return ''; }
 }
 
 export default function CompactNode({ id, data }) {
-  const title = data?.label || id;
-  const summary = summaryFromData(data);
-  const isCandidate = title === 'CandidateLLMs';
-  const candList = isCandidate && data?.params?.candidate_llms ? data.params.candidate_llms : null;
-  const bg = typeColor(title);
-  const accent = typeAccent(title);
+  const label = data?.label || id;
+  const meta  = TYPE_META[label] || { color: '#6366f1', bg: '#eef2ff' };
+  const summary = getSummary(data);
+  const isCandidates = label === 'CandidateLLMs';
+  const candList = isCandidates ? (data?.params?.candidate_llms || []) : [];
 
-  const icon = (label) => {
-    const stroke = 'var(--accent)';
-    switch (label) {
-      case 'LoadData':
-        return (
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 3v10" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 7l4-4 4 4" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-        );
-      case 'Task':
-        return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" stroke={stroke} strokeWidth="1.2"/></svg>);
-      case 'CandidateLLMs':
-        return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="7" cy="7" r="3" stroke={stroke} strokeWidth="1.2"/><circle cx="17" cy="17" r="3" stroke={stroke} strokeWidth="1.2"/></svg>);
-      case 'Filter':
-        return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 6h16" stroke={stroke} strokeWidth="1.5" strokeLinecap="round"/><path d="M10 12h4" stroke={stroke} strokeWidth="1.5" strokeLinecap="round"/><path d="M6 18h12" stroke={stroke} strokeWidth="1.5" strokeLinecap="round"/></svg>);
-      case 'Router':
-        return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 3v18" stroke={stroke} strokeWidth="1.5" strokeLinecap="round"/><path d="M4 10h8" stroke={stroke} strokeWidth="1.5" strokeLinecap="round"/><path d="M12 14h8" stroke={stroke} strokeWidth="1.5" strokeLinecap="round"/></svg>);
-      case 'Annotate':
-        return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M3 21l3-3 11-11 3 3L7 21H3z" stroke={stroke} strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/></svg>);
-      case 'Output':
-        return (<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 12h16" stroke={stroke} strokeWidth="1.5" strokeLinecap="round"/><path d="M12 5l7 7-7 7" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>);
-      default:
-        return null;
-    }
-  };
+  // Progress
+  const progress = data?.progress;
+  const pct = progress && progress.total > 0
+    ? Math.min(100, Math.round((progress.current / progress.total) * 100))
+    : null;
 
   return (
-    <Card className="compact-node p-2 min-w-[140px] shadow-sm hover:shadow-md transition-transform" data-id={id} style={{ ['--accent']: accent, ['--accent-solid']: accent, ['--bg']: bg }}>
-      <Handle type="target" position={Position.Left} className="bg-gray-300" />
+    <div className="compact-node">
+      {/* Accent top bar */}
+      <div className="node-accent-bar" style={{ background: meta.color }} />
 
-      <div className="flex items-center gap-2.5 text-[13px] font-bold mb-0 text-[#0f172a]">
-        <div className="w-[18px] h-[18px] flex items-center justify-center">{icon(title)}</div>
-        <div>{title}</div>
+      <div className="node-body">
+        {/* Title row */}
+        <div className="node-title">
+          <div className="node-icon" style={{ background: meta.bg }}>
+            <NodeIcon label={label} color={meta.color} />
+          </div>
+          <span>{label}</span>
+        </div>
+
+        {/* Summary / content */}
+        {isCandidates ? (
+          <div style={{ marginTop: 8 }}>
+            {(Array.isArray(candList) ? candList : []).slice(0, 5).map((c, i) => (
+              <div key={i} style={{ fontSize: 10.5, color: '#64748b', lineHeight: 1.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {c}
+              </div>
+            ))}
+            {candList.length > 5 && (
+              <div style={{ fontSize: 10, color: '#94a3b8' }}>+{candList.length - 5} more</div>
+            )}
+          </div>
+        ) : (
+          <>
+            {summary ? <div className="node-summary">{summary}</div> : null}
+            {pct !== null && ['Filter', 'Router', 'Annotate'].includes(label) ? (
+              <div className="node-progress">
+                <div className="node-progress-bar">
+                  <div className="node-progress-fill" style={{ width: pct + '%', background: meta.color }} />
+                </div>
+                <div className="node-progress-text">{progress.current}/{progress.total} &middot; {pct}%</div>
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
 
-      {isCandidate && Array.isArray(candList) ? (
-        <div className="flex flex-col gap-1 mt-2">
-          {candList.slice(0, 6).map((c, i) => (
-            <div key={i} className="text-[11px] text-[#333] truncate">{c}</div>
-          ))}
-          {candList.length > 6 ? (
-            <div className="text-[11px] text-[#777]">+{candList.length - 6} more</div>
-          ) : null}
-        </div>
-      ) : (
-        <>
-          {summary ? <div className="text-[12px] text-gray-600 mt-2">{summary}</div> : null}
-
-          {(['Filter', 'Router', 'Annotate'].includes(title) && data && data.progress) ? (
-            (() => {
-              const pr = data.progress || {};
-              const curr = pr.current || 0;
-              const total = pr.total || 0;
-              const pct = total > 0 ? Math.min(100, Math.round((curr / total) * 100)) : 0;
-              return (
-                <div className="mt-2">
-                        <div className="h-2 bg-gray-200 rounded overflow-hidden">
-                          <div className="h-full" style={{ width: `${pct}%`, background: 'var(--accent-solid)' }} />
-                        </div>
-                        <div className="text-[11px] text-gray-500 mt-1">{curr}/{total} ({pct}%)</div>
-                      </div>
-              );
-            })()
-          ) : null}
-        </>
-      )}
-
-      <Handle type="source" position={Position.Right} className="bg-gray-700" />
-    </Card>
+      {/* ReactFlow handles */}
+      <Handle type="target" position={Position.Left} style={{ background: meta.color, border: '2px solid #fff', width: 10, height: 10 }} />
+      <Handle type="source" position={Position.Right} style={{ background: meta.color, border: '2px solid #fff', width: 10, height: 10 }} />
+    </div>
   );
 }
