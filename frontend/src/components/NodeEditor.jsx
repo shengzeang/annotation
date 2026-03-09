@@ -327,19 +327,19 @@ export default function NodeEditor({ node, updateNodeData, deleteNode, openConfi
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div>
       {datalists}
 
-      {/* Header */}
+      {/* Type badge header */}
       <div className="node-editor-header">
         <div className="node-editor-type-badge" style={{ background: accent + '18', color: accent }}>
           {label}
         </div>
-        <div style={{ fontSize: 11, color: '#94a3b8', marginLeft: 'auto' }}>id: {node.id.slice(0, 8)}</div>
+        <div style={{ fontSize: 10.5, color: '#94a3b8', marginLeft: 'auto' }}>id: {node.id.slice(0, 8)}</div>
       </div>
 
       {/* Form */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
+      <div style={{ paddingTop: 10 }}>
         {renderForm()}
       </div>
 
@@ -356,7 +356,7 @@ export default function NodeEditor({ node, updateNodeData, deleteNode, openConfi
           Delete
         </Button>
         <div style={{ flex: 1 }} />
-        <Button variant="primary" onClick={handleSave}>Save changes</Button>
+        <Button variant="primary" onClick={handleSave}>Save</Button>
       </div>
     </div>
   );

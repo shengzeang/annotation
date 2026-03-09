@@ -2,6 +2,7 @@ import React, { useCallback, useState } from 'react';
 import ReactFlow, {
   addEdge,
   Background,
+  BackgroundVariant,
   Controls,
   MiniMap,
   Panel,
@@ -18,25 +19,27 @@ import ReviewQueue from './components/ReviewQueue';
 import CompletedSamples from './components/CompletedSamples';
 import axios from 'axios';
 
-// ─── Initial graph ────────────────────────────────────────────
+// ─── Initial graph (matches target layout) ───────────────────
 const initialNodes = [
-  { id: 'n1', type: 'compact', position: { x: 40, y: 60 },  data: { label: 'LoadData',      params: { dataset: 'squad', max_samples: 200 } } },
-  { id: 'n2', type: 'compact', position: { x: 40, y: 200 }, data: { label: 'Task',           params: { task_class: 'tasks.qa.QATask' } } },
-  { id: 'n3', type: 'compact', position: { x: 40, y: 340 }, data: { label: 'CandidateLLMs', params: { candidate_llms: ['gpt2', 'distilgpt2'] } } },
-  { id: 'n4', type: 'compact', position: { x: 280, y: 200 }, data: { label: 'Filter',    params: { filter_class: 'filters.al_filter.ActiveLearningFilter', filter_params: { method: 'alps', budget: 100, batch_size: 20 } } } },
-  { id: 'n5', type: 'compact', position: { x: 500, y: 200 }, data: { label: 'Router',    params: { router_class: 'routers.knn_router.KNNRouter', router_params: { k: 5 }, candidate_llms: ['gpt2', 'distilgpt2'] } } },
-  { id: 'n6', type: 'compact', position: { x: 720, y: 200 }, data: { label: 'Annotate',  params: { candidate_llms: ['gpt2', 'distilgpt2'], llm_mode: 'local', task_class: 'tasks.qa.QATask' } } },
-  { id: 'n7', type: 'compact', position: { x: 940, y: 200 }, data: { label: 'Output',    params: { path: 'out/annotations.json' } } },
+  // Left column: input nodes
+  { id: 'n1', type: 'compact', position: { x: 60,  y: 60  }, data: { label: 'LoadData',      params: { dataset: 'squad', max_samples: 200 } } },
+  { id: 'n2', type: 'compact', position: { x: 60,  y: 230 }, data: { label: 'Task',           params: { task_class: 'tasks.qa.QATask' } } },
+  { id: 'n3', type: 'compact', position: { x: 60,  y: 400 }, data: { label: 'CandidateLLMs', params: { candidate_llms: ['gpt2', 'distilgpt2'] } } },
+  // Pipeline row
+  { id: 'n4', type: 'compact', position: { x: 320, y: 230 }, data: { label: 'Filter',    params: { filter_class: 'filters.al_filter.ActiveLearningFilter', filter_params: { method: 'alps', budget: 100, batch_size: 20 } } } },
+  { id: 'n5', type: 'compact', position: { x: 530, y: 230 }, data: { label: 'Router',    params: { router_class: 'routers.knn_router.KNNRouter', router_params: { k: 5 }, candidate_llms: ['gpt2', 'distilgpt2'] } } },
+  { id: 'n6', type: 'compact', position: { x: 740, y: 230 }, data: { label: 'Annotate',  params: { candidate_llms: ['gpt2', 'distilgpt2'], llm_mode: 'local', task_class: 'tasks.qa.QATask' } } },
+  { id: 'n7', type: 'compact', position: { x: 950, y: 230 }, data: { label: 'Output',    params: { path: 'out/annotations.json' } } },
 ];
 
 const initialEdges = [
-  { id: 'e1-4', source: 'n1', target: 'n4', style: { strokeWidth: 2 } },
-  { id: 'e4-5', source: 'n4', target: 'n5', style: { strokeWidth: 2 } },
-  { id: 'e5-6', source: 'n5', target: 'n6', style: { strokeWidth: 2 } },
-  { id: 'e6-7', source: 'n6', target: 'n7', style: { strokeWidth: 2 } },
-  { id: 'e3-5', source: 'n3', target: 'n5', style: { strokeWidth: 2, strokeDasharray: '5,4' } },
-  { id: 'e3-6', source: 'n3', target: 'n6', style: { strokeWidth: 2, strokeDasharray: '5,4' } },
-  { id: 'e2-6', source: 'n2', target: 'n6', style: { strokeWidth: 2, strokeDasharray: '5,4' } },
+  { id: 'e1-4', source: 'n1', target: 'n4', style: { stroke: '#94a3b8', strokeWidth: 1.8 } },
+  { id: 'e4-5', source: 'n4', target: 'n5', style: { stroke: '#94a3b8', strokeWidth: 1.8 } },
+  { id: 'e5-6', source: 'n5', target: 'n6', style: { stroke: '#94a3b8', strokeWidth: 1.8 } },
+  { id: 'e6-7', source: 'n6', target: 'n7', style: { stroke: '#94a3b8', strokeWidth: 1.8 } },
+  { id: 'e3-5', source: 'n3', target: 'n5', style: { stroke: '#94a3b8', strokeWidth: 1.8 } },
+  { id: 'e3-6', source: 'n3', target: 'n6', style: { stroke: '#94a3b8', strokeWidth: 1.8 } },
+  { id: 'e2-6', source: 'n2', target: 'n6', style: { stroke: '#94a3b8', strokeWidth: 1.8 } },
 ];
 
 const nodeTypes = { compact: CompactNode };
@@ -49,7 +52,6 @@ export default function App() {
   const [prevNodes, setPrevNodes] = useState(null);
   const [undoStack, setUndoStack] = useState([]);
   const [reviewItems, setReviewItems] = useState([]);
-  const [rightTab, setRightTab] = useState('editor'); // 'editor' | 'review' | 'completed'
   const [confirm, setConfirm] = useState({ open: false, targetId: null, message: '' });
   const [running, setRunning] = useState(false);
 
@@ -97,7 +99,7 @@ export default function App() {
 
   const onConnect = useCallback((params) => {
     pushSnapshot();
-    setEdges((eds) => addEdge({ ...params, style: { strokeWidth: 2 } }, eds));
+    setEdges((eds) => addEdge({ ...params, style: { stroke: '#94a3b8', strokeWidth: 1.8 } }, eds));
   }, [pushSnapshot]);
 
   const onNodesDelete = useCallback((nodesToDelete) => {
@@ -115,7 +117,10 @@ export default function App() {
 
   const onNodeClick = useCallback((event, node) => {
     setSelectedNode(node);
-    setRightTab('editor');
+  }, []);
+
+  const onPaneClick = useCallback(() => {
+    setSelectedNode(null);
   }, []);
 
   const deleteNodeById = useCallback((id) => {
@@ -177,7 +182,7 @@ export default function App() {
       const layer = nObj.layer || 0;
       const column = layers[layer] || [];
       const index = column.findIndex((c) => c.id === n.id);
-      return { ...n, position: { x: 40 + layer * 220, y: 80 + index * 100 } };
+      return { ...n, position: { x: 60 + layer * 210, y: 60 + index * 170 } };
     });
     setNodes(newNodes);
   }, [nodes, edges]);
@@ -194,7 +199,6 @@ export default function App() {
     try {
       const res = await axios.post('http://localhost:5000/run_graph', { nodes, edges });
       console.log('Run result:', res.data);
-      // Extract human-review items
       const ctx = res.data?.context || res.data?.outputs || {};
       const found = [];
       Object.values(ctx).forEach((val) => {
@@ -213,7 +217,6 @@ export default function App() {
           const runOnly = found.filter((f) => !curServer.find((s) => same(s, f)));
           return [...curServer, ...runOnly];
         });
-        setRightTab('review');
       }
       alert('Pipeline run completed.');
     } catch (err) {
@@ -245,26 +248,36 @@ export default function App() {
             onNodesDelete={onNodesDelete}
             onEdgesDelete={onEdgesDelete}
             onNodeClick={onNodeClick}
+            onPaneClick={onPaneClick}
             fitView
-            fitViewOptions={{ padding: 0.2 }}
+            fitViewOptions={{ padding: 0.18 }}
             deleteKeyCode={null}
           >
-            <Background color="#c7d2fe" gap={20} size={1} style={{ opacity: 0.4 }} />
-            <Controls />
+            {/* Dotted grid background */}
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={20}
+              size={1}
+              color="#c7cfe0"
+            />
+            <Controls style={{ bottom: 16, left: 16, top: 'auto' }} />
             <MiniMap
               nodeColor={(node) => {
-                const colors = { LoadData: '#3b82f6', Task: '#f97316', CandidateLLMs: '#8b5cf6', Filter: '#22c55e', Router: '#ec4899', Annotate: '#f59e0b', Output: '#14b8a6' };
+                const colors = {
+                  LoadData: '#3b82f6', Task: '#f97316', CandidateLLMs: '#8b5cf6',
+                  Filter: '#22c55e', Router: '#ec4899', Annotate: '#f59e0b', Output: '#14b8a6',
+                };
                 return colors[node.data?.label] || '#94a3b8';
               }}
-              style={{ background: '#fff', borderRadius: 10, border: '1px solid rgba(15,23,42,0.08)' }}
+              style={{ bottom: 16, right: 16, background: '#fff', borderRadius: 10, border: '1px solid rgba(15,23,42,0.08)', boxShadow: '0 2px 8px rgba(2,6,23,0.06)' }}
             />
 
-            {/* Toolbar */}
+            {/* ── Top toolbar ── */}
             <Panel position="top-left">
-              <div className="panel-actions">
-                {/* Run */}
+              <div className="toolbar">
+                {/* Run Graph */}
                 <button
-                  className="btn btn-primary"
+                  className="btn btn-run"
                   onClick={handleRun}
                   disabled={running}
                   title="Run the pipeline"
@@ -272,99 +285,76 @@ export default function App() {
                   {running ? (
                     <>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" className="spin-icon">
-                        <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" strokeWidth="2.5"/>
+                        <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.35)" strokeWidth="2.5"/>
                         <path d="M12 2a10 10 0 0 1 10 10" stroke="#fff" strokeWidth="2.5" strokeLinecap="round"/>
                       </svg>
-                      <span>Running…</span>
+                      Running…
                     </>
                   ) : (
                     <>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="white">
-                        <path d="M5 3v18l15-9L5 3z"/>
+                      <svg width="11" height="13" viewBox="0 0 12 14" fill="white">
+                        <path d="M1 1l10 6-10 6V1z"/>
                       </svg>
-                      <span>Run Pipeline</span>
+                      Run Graph
                     </>
                   )}
                 </button>
 
-                <div style={{ width: 1, height: 20, background: 'rgba(15,23,42,0.1)', margin: '0 2px' }} />
+                {/* Divider */}
+                <span className="toolbar-sep">|</span>
 
-                {/* Compact layout */}
-                <button className="btn btn-secondary" onClick={compactLayout} title="Auto-arrange nodes">
+                {/* Compact */}
+                <button className="btn btn-toolbar" onClick={compactLayout} title="Auto-arrange nodes">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                    <rect x="3" y="3" width="6" height="6" rx="1.5" stroke="#374151" strokeWidth="2"/>
-                    <rect x="15" y="3" width="6" height="6" rx="1.5" stroke="#374151" strokeWidth="2"/>
-                    <rect x="9" y="15" width="6" height="6" rx="1.5" stroke="#374151" strokeWidth="2"/>
-                    <path d="M6 9v3a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V9" stroke="#374151" strokeWidth="1.8" strokeLinecap="round"/>
+                    <rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.8"/>
+                    <rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.8"/>
+                    <rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.8"/>
+                    <rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.8"/>
                   </svg>
-                  <span>Layout</span>
+                  Compact
                 </button>
 
                 {/* Undo */}
                 <button
-                  className="btn btn-secondary"
+                  className="btn btn-toolbar"
                   onClick={handleUndo}
                   disabled={!canUndo}
                   title="Undo last action"
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                    <path d="M21 7v6h-6" stroke="#374151" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                    <path d="M3 17a9 9 0 0 1 15.9-6.36L21 11" stroke="#374151" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M9 14H4V9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M4 9a9 9 0 1 1 0 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
                   </svg>
-                  <span>Undo</span>
+                  Undo
                 </button>
 
                 {/* Delete */}
                 <button
-                  className="btn btn-danger"
+                  className="btn btn-delete"
                   onClick={deleteSelected}
                   disabled={!selectedNode}
                   title="Delete selected node"
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                    <path d="M3 6h18" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-                    <path d="M8 6V4h8v2" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-                    <path d="M19 6l-1 14H6L5 6" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
-                  <span>Delete</span>
+                  Delete
                 </button>
               </div>
             </Panel>
           </ReactFlow>
         </div>
 
-        {/* ── Right panel ── */}
+        {/* ── Right panel (stacked, no tabs) ── */}
         <div className="right-panel">
-          {/* Tabs */}
-          <div className="right-tabs">
-            <div
-              className={'right-tab' + (rightTab === 'editor' ? ' active' : '')}
-              onClick={() => setRightTab('editor')}
-            >
-              Properties
-            </div>
-            <div
-              className={'right-tab' + (rightTab === 'review' ? ' active' : '')}
-              onClick={() => setRightTab('review')}
-            >
-              Review Queue
-              {reviewItems.length > 0 && (
-                <span style={{ marginLeft: 5, background: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '1px 5px' }}>
-                  {reviewItems.length}
-                </span>
-              )}
-            </div>
-            <div
-              className={'right-tab' + (rightTab === 'completed' ? ' active' : '')}
-              onClick={() => setRightTab('completed')}
-            >
-              Completed
-            </div>
-          </div>
+          <div className="right-panel-scroll">
 
-          {/* Tab bodies */}
-          {rightTab === 'editor' && (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {/* ── Node Editor section ── */}
+            <div className="rp-section">
+              <div className="rp-section-header">
+                <span className="rp-section-title">Node Editor</span>
+              </div>
+
               {selectedNode ? (
                 <NodeEditor
                   node={selectedNode}
@@ -373,32 +363,29 @@ export default function App() {
                   openConfirm={(id, message) => setConfirm({ open: true, targetId: id, message })}
                 />
               ) : (
-                <div style={{ padding: '32px 20px', textAlign: 'center' }}>
-                  <svg width="44" height="44" viewBox="0 0 24 24" fill="none" style={{ margin: '0 auto 12px', display: 'block', opacity: 0.2 }}>
-                    <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="#374151" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-                    <path d="M2 17l10 5 10-5" stroke="#374151" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-                    <path d="M2 12l10 5 10-5" stroke="#374151" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                  <div style={{ fontSize: 13.5, fontWeight: 600, color: '#374151' }}>No node selected</div>
-                  <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 5, lineHeight: 1.5 }}>
-                    Click on a node in the canvas to edit its parameters
-                  </div>
+                <div className="rp-empty-state">
+                  <div className="rp-empty-text">Select a node to edit its params</div>
                 </div>
               )}
             </div>
-          )}
 
-          {rightTab === 'review' && (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {/* ── Divider ── */}
+            <div className="rp-divider" />
+
+            {/* ── Review Queue section ── */}
+            <div className="rp-section">
               <ReviewQueue items={reviewItems} onUpdate={(items) => setReviewItems(items)} />
             </div>
-          )}
 
-          {rightTab === 'completed' && (
-            <div style={{ flex: 1, overflow: 'hidden' }}>
+            {/* ── Divider ── */}
+            <div className="rp-divider" />
+
+            {/* ── Completed Samples section ── */}
+            <div className="rp-section">
               <CompletedSamples />
             </div>
-          )}
+
+          </div>
         </div>
 
         {/* Confirm delete modal */}

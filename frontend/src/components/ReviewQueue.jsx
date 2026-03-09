@@ -58,119 +58,103 @@ export default function ReviewQueue({ items, onUpdate }) {
     }
   };
 
+  // Empty state — matches target image
   if (!list.length) {
     return (
-      <div style={{ padding: '32px 16px', textAlign: 'center' }}>
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" style={{ margin: '0 auto 12px', display: 'block', opacity: 0.25 }}>
-          <path d="M9 12l2 2 4-4m6 2a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" stroke="#374151" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+      <div className="rp-queue-empty">
+        <svg className="rp-empty-icon" width="36" height="36" viewBox="0 0 24 24" fill="none">
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" stroke="#9ca3af" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+          <polyline points="22 4 12 14.01 9 11.01" stroke="#9ca3af" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
         </svg>
-        <div style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>No items in review queue</div>
-        <div style={{ fontSize: 11.5, color: '#cbd5e1', marginTop: 4 }}>Items needing human review will appear here</div>
+        <div className="rp-empty-label">No items in review queue</div>
+        <div className="rp-empty-sublabel">Items needing human review will appear here</div>
       </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div>
       {/* List */}
-      <div style={{ padding: '10px 16px 6px', borderBottom: '1px solid rgba(15,23,42,0.07)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-          <span style={{ fontSize: 11.5, fontWeight: 700, color: '#374151' }}>{list.length} items</span>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button
-              style={{ fontSize: 11, color: '#6366f1', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, padding: '2px 0' }}
-              onClick={() => setSelectedSet(new Set(list.map((_, i) => i)))}
-            >Select all</button>
-            <span style={{ color: '#e2e8f0' }}>|</span>
-            <button
-              style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, padding: '2px 0' }}
-              onClick={() => setSelectedSet(new Set())}
-            >Clear</button>
-          </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <span style={{ fontSize: 11.5, fontWeight: 700, color: '#374151' }}>{list.length} items</span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            style={{ fontSize: 11, color: '#6366f1', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, padding: '2px 0' }}
+            onClick={() => setSelectedSet(new Set(list.map((_, i) => i)))}
+          >Select all</button>
+          <span style={{ color: '#e2e8f0' }}>|</span>
+          <button
+            style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, padding: '2px 0' }}
+            onClick={() => setSelectedSet(new Set())}
+          >Clear</button>
         </div>
-        <div style={{ maxHeight: 200, overflowY: 'auto' }}>
-          {list.map((it, i) => (
-            <div
-              key={i}
-              className={'review-item' + (i === sel ? ' active' : '')}
-              onClick={() => setSel(i)}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <input
-                  type="checkbox"
-                  checked={selectedSet.has(i)}
-                  onChange={() => toggleSelect(i)}
-                  onClick={(e) => e.stopPropagation()}
-                  style={{ accentColor: '#6366f1', flexShrink: 0 }}
-                />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: '#1e293b' }}>{it.id || it.qid || `item ${i + 1}`}</span>
-                    <span className="review-badge" style={it._server
-                      ? { background: '#f0fdf4', color: '#16a34a' }
-                      : { background: '#fffbeb', color: '#d97706' }}>
-                      {it._server ? 'server' : 'run'}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {String(it.annotation || '').slice(0, 60)}
-                  </div>
+      </div>
+
+      <div style={{ maxHeight: 200, overflowY: 'auto', marginBottom: 12 }}>
+        {list.map((it, i) => (
+          <div
+            key={i}
+            className={'review-item' + (i === sel ? ' active' : '')}
+            onClick={() => setSel(i)}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={selectedSet.has(i)}
+                onChange={() => toggleSelect(i)}
+                onClick={(e) => e.stopPropagation()}
+                style={{ accentColor: '#6366f1', flexShrink: 0 }}
+              />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: '#1e293b' }}>{it.id || it.qid || `item ${i + 1}`}</span>
+                  <span className="review-badge" style={it._server
+                    ? { background: '#f0fdf4', color: '#16a34a' }
+                    : { background: '#fffbeb', color: '#d97706' }}>
+                    {it._server ? 'server' : 'run'}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {String(it.annotation || '').slice(0, 60)}
                 </div>
               </div>
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
       </div>
 
       {/* Detail view */}
       {cur && (
-        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 6 }}>Selected item</div>
-          <div style={{ fontSize: 12.5, color: '#475569', lineHeight: 1.6, background: '#f8fafc', borderRadius: 8, padding: '10px 12px', marginBottom: 12, border: '1px solid #e2e8f0' }}>
-            {cur.question || cur.q || cur.text || JSON.stringify(cur).slice(0, 300)}
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 5 }}>Selected item</div>
+          <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.6, background: '#f8fafc', borderRadius: 7, padding: '9px 10px', marginBottom: 10, border: '1px solid #e2e8f0' }}>
+            {cur.question || cur.q || cur.text || JSON.stringify(cur).slice(0, 200)}
           </div>
 
           <div className="field-group">
             <label className="field-label">Annotation</label>
-            <input
-              className="field-input"
-              value={cur.annotation || ''}
-              onChange={(e) => handleChange('annotation', e.target.value)}
-              placeholder="Enter annotation…"
-            />
+            <input className="field-input" value={cur.annotation || ''} onChange={(e) => handleChange('annotation', e.target.value)} placeholder="Enter annotation…" />
           </div>
 
           <div className="field-group">
             <label className="field-label">Confidence (0–1)</label>
-            <input
-              type="number" step="0.01" min="0" max="1"
-              className="field-input"
-              value={cur.confidence || 0}
-              onChange={(e) => handleChange('confidence', Number(e.target.value) || 0)}
-              style={{ width: 100 }}
-            />
+            <input type="number" step="0.01" min="0" max="1" className="field-input" value={cur.confidence || 0} onChange={(e) => handleChange('confidence', Number(e.target.value) || 0)} style={{ width: 90 }} />
           </div>
 
           <div className="field-group">
             <label className="field-label">Notes</label>
-            <textarea
-              rows={3}
-              className="field-input field-textarea"
-              value={cur.notes || ''}
-              onChange={(e) => handleChange('notes', e.target.value)}
-              placeholder="Optional notes…"
-            />
+            <textarea rows={3} className="field-input field-textarea" value={cur.notes || ''} onChange={(e) => handleChange('notes', e.target.value)} placeholder="Optional notes…" />
           </div>
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 8 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
             <Button variant="primary" onClick={() => submitAction('update')}>Save</Button>
             <Button variant="primary" onClick={() => submitAction('approve')}>Approve</Button>
             <Button variant="ghost" onClick={() => submitAction('reject')}>Reject</Button>
           </div>
 
           {selectedSet.size > 0 && (
-            <div style={{ display: 'flex', gap: 7, marginTop: 10, paddingTop: 10, borderTop: '1px solid #f1f5f9' }}>
-              <span style={{ fontSize: 11.5, color: '#94a3b8', alignSelf: 'center' }}>{selectedSet.size} selected:</span>
+            <div style={{ display: 'flex', gap: 6, paddingTop: 8, borderTop: '1px solid #f1f5f9', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>{selectedSet.size} selected:</span>
               <Button variant="primary" onClick={() => submitBulk('approve')}>Bulk Approve</Button>
               <Button variant="ghost" onClick={() => submitBulk('reject')}>Bulk Reject</Button>
             </div>
