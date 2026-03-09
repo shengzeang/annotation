@@ -67,9 +67,12 @@ class RouterDCRouter(BaseRouter):
         return np.vstack(all_embs)
 
     #Using sample-LLM constrastve loss (as per RouterDC) to generate model/identity vectors
-    def build_from_annotations(self, out_dir: str):
-        with open(self.ann_path) as f:
-            data = json.load(f)
+    def build_from_annotations(self, annotations, out_dir: str = "./"):
+        if annotations is not None and isinstance(annotations, list):
+            data = annotations
+        else:
+            with open(self.ann_path) as f:
+                data = json.load(f)
         queries = []
         labels = []
         # Load (query, model_index)

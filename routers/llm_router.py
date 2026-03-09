@@ -10,14 +10,19 @@ class LLMRouter(BaseRouter):
     Scores candidate LLMs for each sample using a scoring LLM (which can be local or API-backed).
     """
 
-    def __init__(self, scorer: LLMBase, temperature: float = 0.0):
+    def __init__(self, scorer: LLMBase, candidate_llms: List[str] = None, temperature: float = 0.0):
         self.scorer = scorer
+        self.candidate_llms = candidate_llms or []
         self.temperature = temperature
 
     @property
     def if_train(self):
         self.ready = True
         return False
+
+    def build_from_annotations(self, annotations, out_dir: str = "./"):
+        """No-op: LLMRouter does not require an offline training phase."""
+        pass
 
     def _build_prompt(self, sample_text: str, candidate_llms: List[str]) -> str:
         prompt = (
