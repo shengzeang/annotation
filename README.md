@@ -45,11 +45,19 @@ python -m api.server
 python api/server.py
 ```
 
-### 4. Access the API
+### 4. Run the Frontend Interface
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### 5. Access the API
 
 Open [http://127.0.0.1:5000](http://127.0.0.1:5000) to interact with the provided endpoints or run pipeline graphs.
 
-### 5. Explore the Frontend Interface
+### 6. Explore the Frontend Interface
 
 The frontend of DataFlow-Annotator is built using **React-Flow** for the user interface and **Python Flask** for the backend. It provides an intuitive way to create and manage annotation pipelines. Follow these steps to get started:
 
