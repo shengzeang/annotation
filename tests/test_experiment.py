@@ -16,6 +16,9 @@ from experiments.run_kb_experiment import (
     run_experiment,
 )
 
+PATH_NOT_FOUND = "-1"
+FIRST_POSITION = "0"
+
 
 def _make_samples(n=30):
     rows = []
@@ -54,25 +57,28 @@ class TestExperimentConditions(unittest.TestCase):
     def test_run_kb_experiment_does_not_prepend_project_root_to_sys_path(self):
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         script_path = os.path.join(repo_root, "experiments", "run_kb_experiment.py")
+        script_path_literal = json.dumps(script_path)
+        repo_root_literal = json.dumps(repo_root)
+        self.assertTrue(os.path.exists(script_path))
+        self.assertTrue(os.path.abspath(script_path).startswith(repo_root + os.sep))
         cmd = [
             sys.executable,
             "-c",
             (
                 "import os, sys; "
                 "import importlib.util; "
-                f"script={script_path!r}; "
-                "spec=importlib.util.spec_from_file_location('run_kb_experiment_test_mod', script); "
+                f"spec=importlib.util.spec_from_file_location('run_kb_experiment_test_mod', {script_path_literal}); "
                 "mod=importlib.util.module_from_spec(spec); "
                 "spec.loader.exec_module(mod); "
-                f"root={repo_root!r}; "
-                "idx=next((i for i,p in enumerate(sys.path) "
-                "if os.path.abspath(p or os.getcwd())==root), -1); "
+                f"root={repo_root_literal}; "
+                "idx=next((index for index, path in enumerate(sys.path) "
+                "if os.path.abspath(path or os.getcwd())==root), -1); "
                 "print(idx)"
             ),
         ]
-        proc = subprocess.run(cmd, cwd="/tmp", check=True, capture_output=True, text=True)
-        self.assertNotEqual(proc.stdout.strip(), "-1")
-        self.assertNotEqual(proc.stdout.strip(), "0")
+        proc = subprocess.run(cmd, cwd=tempfile.gettempdir(), check=True, capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(proc.stdout.strip(), PATH_NOT_FOUND, "project root should be added to sys.path")
+        self.assertNotEqual(proc.stdout.strip(), FIRST_POSITION, "project root must not be prepended at sys.path[0]")
 
     def test_entry_control_reduces_kb_contamination_vs_naive(self):
         samples = _make_samples(40)
