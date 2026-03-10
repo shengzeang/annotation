@@ -1,0 +1,21 @@
+{"instruction": "Question: In what country is Normandy located?\nContext: Normandy is a region located in northern France.", "output": "France"}
+{"instruction": "Question: What river flows through London?\nContext: The Thames is a river that flows through London.", "output": "Thames"}
+{"instruction": "Question: On which continent is Brazil located?\nContext: Brazil is the largest country in South America.", "output": "South America"}
+{"instruction": "Question: What is the largest country by area?\nContext: Russia is the largest country in the world by total area.", "output": "Russia"}
+{"instruction": "Question: What is the chemical symbol for water?\nContext: Water is composed of hydrogen and oxygen, with chemical symbol H2O.", "output": "H2O"}
+{"instruction": "Question: What planet is closest to the Sun?\nContext: Mercury is the closest planet to the Sun in our solar system.", "output": "Mercury"}
+{"instruction": "Question: What is the powerhouse of the cell?\nContext: The mitochondria is often called the powerhouse of the cell.", "output": "mitochondria"}
+{"instruction": "Question: What force keeps planets in orbit around the Sun?\nContext: Gravity is the force that keeps planets in orbit around the Sun.", "output": "gravity"}
+{"instruction": "Question: How many chromosomes do humans typically have?\nContext: Humans typically have 46 chromosomes in each cell.", "output": "46"}
+{"instruction": "Question: What is the boiling point of water in Celsius?\nContext: Water boils at 100 degrees Celsius at sea level.", "output": "100 degrees Celsius"}
+{"instruction": "Question: In what year did the French Revolution begin?\nContext: The French Revolution began in 1789 with the storming of the Bastille.", "output": "1789"}
+{"instruction": "Question: In what country did the Industrial Revolution begin?\nContext: The Industrial Revolution began in England in the 18th century.", "output": "England"}
+{"instruction": "Question: Who was the first woman to win a Nobel Prize?\nContext: Marie Curie was the first woman to win a Nobel Prize.", "output": "Marie Curie"}
+{"instruction": "Question: What ancient wonder was located in Alexandria?\nContext: The Library of Alexandria was one of the wonders of the ancient world.", "output": "Library of Alexandria"}
+{"instruction": "Question: How many players are on a basketball team on the court?\nContext: Each basketball team has five players on the court at a time.", "output": "five"}
+{"instruction": "Question: What country hosted the 2016 Summer Olympics?\nContext: The 2016 Summer Olympics were held in Rio de Janeiro, Brazil.", "output": "Brazil"}
+{"instruction": "Question: In what year were the first modern Olympics held?\nContext: The first modern Olympics were held in Athens, Greece in 1896.", "output": "1896"}
+{"instruction": "Question: What is the national sport of Canada?\nContext: Ice hockey is considered the national sport of Canada.", "output": "ice hockey"}
+{"instruction": "Question: How many points is a touchdown worth in American football?\nContext: A touchdown is worth six points in American football.", "output": "six"}
+{"instruction": "Question: How many holes are in a standard golf course?\nContext: A standard golf course has 18 holes.", "output": "18"}
+{"instruction": "Question: What event is Usain Bolt famous for competing in?\nContext: Usain Bolt is famous for competing in the 100-meter sprint.", "output": "100-meter sprint"}
