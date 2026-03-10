@@ -815,7 +815,7 @@ def print_results_table(results: List[Dict[str, Any]]) -> None:
 
     # Header
     print(
-        f"  {'Condition':<18} | {'KB Size':>7} | {'Reviewd':>7} | {'Purged':>6} | "
+        f"  {'Condition':<18} | {'KB Size':>7} | {'Reviewed':>8} | {'Purged':>6} | "
         f"{'KB Prec':>8} | {'KB Rec':>7} | {'KB F1':>7} | "
         f"{'KB EM':>7} | {'KB F1s':>7} | {'Dn EM':>7} | {'Dn F1':>7}"
     )
@@ -829,7 +829,7 @@ def print_results_table(results: List[Dict[str, Any]]) -> None:
         if r is None:
             continue
         print(
-            f"  {r['condition']:<18} | {r['n_accepted']:>7} | {r['n_human_review']:>7} | "
+            f"  {r['condition']:<18} | {r['n_accepted']:>7} | {r['n_human_review']:>8} | "
             f"{r['n_purge_removed']:>6} | "
             f"{r['kb_precision']:>8.1%} | {r['kb_recall']:>7.1%} | {r['kb_f1']:>7.1%} | "
             f"{r['kb_avg_em']:>7.1%} | {r['kb_avg_token_f1']:>7.1%} | "
@@ -840,7 +840,7 @@ def print_results_table(results: List[Dict[str, Any]]) -> None:
     print(divider2)
     print(
         "  Columns: KB Size = entries accepted into knowledge base; "
-        "Reviewd = sent to human review; Purged = removed by outlier purge;\n"
+        "Reviewed = sent to human review; Purged = removed by outlier purge;\n"
         "  KB Prec = precision of accepted annotations (correct/accepted); "
         "KB Rec = recall (correct/all_train);\n"
         "  KB F1 = harmonic mean of KB precision and recall; "
