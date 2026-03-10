@@ -1,4 +1,5 @@
 import argparse
+import importlib.util
 import json
 import os
 import random
@@ -13,8 +14,19 @@ if _PROJECT_ROOT not in sys.path:
     # (e.g., `datasets`) to avoid import collisions.
     sys.path.append(_PROJECT_ROOT)
 
-from annotation import Annotator
-from datasets.qa_datasets import SquadDataset
+
+def _load_local_module(module_name: str, rel_path: str):
+    module_path = os.path.join(_PROJECT_ROOT, rel_path)
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load module spec for {module_name} from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+Annotator = _load_local_module("annotation_local", "annotation.py").Annotator
+SquadDataset = _load_local_module("qa_datasets_local", os.path.join("datasets", "qa_datasets.py")).SquadDataset
 from rag import VectorKnowledgeBase
 from tasks.qa import QATask
 

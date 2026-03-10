@@ -80,6 +80,30 @@ class TestExperimentConditions(unittest.TestCase):
         self.assertNotEqual(proc.stdout.strip(), PATH_NOT_FOUND, "project root should be added to sys.path")
         self.assertNotEqual(proc.stdout.strip(), FIRST_POSITION, "project root must not be prepended at sys.path[0]")
 
+    def test_run_kb_experiment_does_not_import_local_datasets_package(self):
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        script_path = os.path.join(repo_root, "experiments", "run_kb_experiment.py")
+        script_path_literal = json.dumps(script_path)
+        cmd = [
+            sys.executable,
+            "-c",
+            (
+                "import os, sys; "
+                "import importlib.util; "
+                f"spec=importlib.util.spec_from_file_location('run_kb_experiment_test_mod', {script_path_literal}); "
+                "mod=importlib.util.module_from_spec(spec); "
+                "spec.loader.exec_module(mod); "
+                "datasets_mod = sys.modules.get('datasets'); "
+                "print(getattr(datasets_mod, '__file__', ''))"
+            ),
+        ]
+        proc = subprocess.run(cmd, cwd=tempfile.gettempdir(), check=True, capture_output=True, text=True, timeout=30)
+        self.assertNotIn(
+            f"{os.sep}annotation{os.sep}datasets{os.sep}__init__.py",
+            proc.stdout.strip(),
+            "run_kb_experiment should not register local datasets package as top-level 'datasets'",
+        )
+
     def test_entry_control_reduces_kb_contamination_vs_naive(self):
         samples = _make_samples(40)
         train, eval_set = samples[:30], samples[30:]
