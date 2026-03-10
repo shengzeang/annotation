@@ -67,7 +67,7 @@ class TestExperimentConditions(unittest.TestCase):
             (
                 "import os, sys; "
                 "import importlib.util; "
-                f"spec=importlib.util.spec_from_file_location('run_kb_experiment_test_mod', {script_path_literal}); "
+                f"spec=importlib.util.spec_from_file_location('test_run_kb_experiment_module', {script_path_literal}); "
                 "mod=importlib.util.module_from_spec(spec); "
                 "spec.loader.exec_module(mod); "
                 f"root={repo_root_literal}; "
@@ -80,7 +80,7 @@ class TestExperimentConditions(unittest.TestCase):
         self.assertNotEqual(proc.stdout.strip(), PATH_NOT_FOUND, "project root should be added to sys.path")
         self.assertNotEqual(proc.stdout.strip(), FIRST_POSITION, "project root must not be prepended at sys.path[0]")
 
-    def test_run_kb_experiment_does_not_import_local_datasets_package(self):
+    def test_run_kb_experiment_avoids_datasets_package_collision(self):
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         script_path = os.path.join(repo_root, "experiments", "run_kb_experiment.py")
         script_path_literal = json.dumps(script_path)
@@ -90,7 +90,7 @@ class TestExperimentConditions(unittest.TestCase):
             (
                 "import os, sys; "
                 "import importlib.util; "
-                f"spec=importlib.util.spec_from_file_location('run_kb_experiment_test_mod', {script_path_literal}); "
+                f"spec=importlib.util.spec_from_file_location('test_run_kb_experiment_module', {script_path_literal}); "
                 "mod=importlib.util.module_from_spec(spec); "
                 "spec.loader.exec_module(mod); "
                 "datasets_mod = sys.modules.get('datasets'); "

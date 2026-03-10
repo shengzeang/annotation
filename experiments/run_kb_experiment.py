@@ -1,4 +1,5 @@
 import argparse
+import functools
 import importlib.util
 import json
 import os
@@ -16,19 +17,53 @@ if _PROJECT_ROOT not in sys.path:
 
 
 def _load_local_module(module_name: str, rel_path: str):
+    """Load a local module from ``rel_path`` under project root.
+
+    This avoids ambiguous top-level imports (for example ``datasets``) that can
+    collide with third-party packages.
+
+    Parameters
+    ----------
+    module_name:
+        Name used when caching the loaded module in ``sys.modules``.
+    rel_path:
+        File path relative to the project root.
+    """
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
     module_path = os.path.join(_PROJECT_ROOT, rel_path)
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Could not load module spec for {module_name} from {module_path}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
 
 
-Annotator = _load_local_module("annotation_local", "annotation.py").Annotator
-SquadDataset = _load_local_module("qa_datasets_local", os.path.join("datasets", "qa_datasets.py")).SquadDataset
 from rag import VectorKnowledgeBase
 from tasks.qa import QATask
+
+
+@functools.lru_cache(maxsize=1)
+def _get_local_annotator():
+    annotator_cls = getattr(_load_local_module("annotation_impl", "annotation.py"), "Annotator", None)
+    if annotator_cls is None:
+        raise ImportError("Local module annotation.py does not define Annotator")
+    return annotator_cls
+
+
+@functools.lru_cache(maxsize=1)
+def _get_local_squad_dataset():
+    squad_dataset_cls = getattr(
+        _load_local_module("qa_datasets_impl", os.path.join("datasets", "qa_datasets.py")),
+        "SquadDataset",
+        None,
+    )
+    if squad_dataset_cls is None:
+        raise ImportError("Local module datasets/qa_datasets.py does not define SquadDataset")
+    return squad_dataset_cls
 
 
 QWEN_3_06B = "Qwen/Qwen3-0.6B"
@@ -156,8 +191,8 @@ def run_condition(
     os.makedirs(output_dir, exist_ok=True)
     kb_path = os.path.join(output_dir, f"{cfg.name}_kb.json")
     results_path = os.path.join(output_dir, f"{cfg.name}_annotations.json")
-
-    annotator = Annotator(
+    annotator_cls = _get_local_annotator()
+    annotator = annotator_cls(
         candidate_llms=["sim"],
         llm_dict={"sim": llm_obj},
         confidence_threshold=cfg.confidence_threshold,
@@ -186,8 +221,9 @@ def run_condition(
 
 
 def load_squad_500(cache_path: str = "squad_train.json", sample_count: int = 500) -> List[Dict[str, Any]]:
+    squad_dataset_cls = _get_local_squad_dataset()
     try:
-        ds = SquadDataset.from_url(save_path=cache_path, max_samples=sample_count, overwrite=False)
+        ds = squad_dataset_cls.from_url(save_path=cache_path, max_samples=sample_count, overwrite=False)
     except Exception as exc:
         raise RuntimeError(
             "Failed to load SQuAD samples. Provide a local cached SQuAD file via --squad-cache-path "
