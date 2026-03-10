@@ -87,7 +87,7 @@ The frontend of DataFlow-Annotator is built using **React-Flow** for the user in
 
 ### KB Experiment CLI (exact commands)
 
-From the repository root (`/home/runner/work/annotation/annotation`):
+From the repository root:
 
 ```bash
 # 1) Run the 500-sample experiment only (no finetuning)
