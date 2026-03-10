@@ -7,7 +7,11 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _PROJECT_ROOT not in sys.path:
+    # Keep third-party packages ahead of local modules with generic names
+    # (e.g., `datasets`) to avoid import collisions.
+    sys.path.append(_PROJECT_ROOT)
 
 from annotation import Annotator
 from datasets.qa_datasets import SquadDataset

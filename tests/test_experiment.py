@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -50,6 +51,29 @@ class TestSimulatedLLM(unittest.TestCase):
 
 
 class TestExperimentConditions(unittest.TestCase):
+    def test_run_kb_experiment_does_not_prepend_project_root_to_sys_path(self):
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        script_path = os.path.join(repo_root, "experiments", "run_kb_experiment.py")
+        cmd = [
+            sys.executable,
+            "-c",
+            (
+                "import os, sys; "
+                "import importlib.util; "
+                f"script={script_path!r}; "
+                "spec=importlib.util.spec_from_file_location('run_kb_experiment_test_mod', script); "
+                "mod=importlib.util.module_from_spec(spec); "
+                "spec.loader.exec_module(mod); "
+                f"root={repo_root!r}; "
+                "idx=next((i for i,p in enumerate(sys.path) "
+                "if os.path.abspath(p or os.getcwd())==root), -1); "
+                "print(idx)"
+            ),
+        ]
+        proc = subprocess.run(cmd, cwd="/tmp", check=True, capture_output=True, text=True)
+        self.assertNotEqual(proc.stdout.strip(), "-1")
+        self.assertNotEqual(proc.stdout.strip(), "0")
+
     def test_entry_control_reduces_kb_contamination_vs_naive(self):
         samples = _make_samples(40)
         train, eval_set = samples[:30], samples[30:]
