@@ -59,7 +59,9 @@ class SimulatedLLM:
         return "incorrect"
 
     def generate_with_logprobs(self, prompt: str, max_new_tokens: int = 50):
-        del max_new_tokens
+        """Return (output, avg_logprob) matching LocalLLM/APILLM interface."""
+        # Keep max_new_tokens for compatibility with real LLM interfaces.
+        _ = max_new_tokens
         question = self._extract_question(prompt)
         gold = self.answer_key.get(question, "unknown")
 
@@ -84,7 +86,9 @@ class OracleLLM(SimulatedLLM):
         super().__init__(answer_key=answer_key, error_rate=0.0, high_confidence_error_rate=0.0)
 
     def generate_with_logprobs(self, prompt: str, max_new_tokens: int = 50):
-        del max_new_tokens
+        """Return (output, avg_logprob) matching LocalLLM/APILLM interface."""
+        # Keep max_new_tokens for compatibility with real LLM interfaces.
+        _ = max_new_tokens
         question = self._extract_question(prompt)
         gold = self.answer_key.get(question, "unknown")
         return f"Answer: {gold} Confidence: 0.99", -0.01
@@ -175,13 +179,16 @@ def load_squad_500(cache_path: str = "squad_train.json", sample_count: int = 500
         ) from exc
     rows = ds.to_list()
     if len(rows) < sample_count:
-        raise ValueError(f"Need {sample_count} SQuAD samples, only got {len(rows)}")
+        raise ValueError(f"Expected {sample_count} SQuAD samples, but only loaded {len(rows)}")
     return rows[:sample_count]
 
 
 def split_train_eval(samples: List[Dict[str, Any]], eval_size: int = 100) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     if eval_size <= 0 or eval_size >= len(samples):
-        raise ValueError("eval_size must be between 1 and len(samples)-1")
+        raise ValueError(
+            f"eval_size must be between 1 and {len(samples)-1} "
+            f"(got {eval_size} with {len(samples)} total samples)"
+        )
     return samples[:-eval_size], samples[-eval_size:]
 
 
@@ -212,6 +219,8 @@ def maybe_finetune_models(
         model_out = os.path.join(output_dir, model_slug)
         status = "prepared"
         if execute_finetune:
+            # Lazy import keeps experiment execution lightweight when users only
+            # want baseline comparison and SFT-file generation.
             from misc.evaluate import finetune_sft
 
             finetune_sft(sft_path, model_name, model_out, epochs=1, batch_size=1)
@@ -228,7 +237,10 @@ def run_experiment(
     squad_cache_path: str = "squad_train.json",
 ) -> Dict[str, Any]:
     if execute_finetune and not run_finetune:
-        raise ValueError("execute_finetune=True requires run_finetune=True")
+        raise ValueError(
+            "Cannot execute fine-tuning without generating SFT files. "
+            "Set --run-finetune when using --execute-finetune."
+        )
 
     samples = load_squad_500(cache_path=squad_cache_path, sample_count=sample_count)
     train_set, eval_set = split_train_eval(samples, eval_size=100)
