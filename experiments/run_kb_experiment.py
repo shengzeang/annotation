@@ -4,8 +4,7 @@ Experiment: Dual-threshold Entry Control vs Periodic Outlier Purge
 ===================================================================
 
 Quantifies the effects of two knowledge-base quality-control mechanisms on
-annotation accuracy and simulated downstream QA performance using SQuAD-style
-data.
+annotation accuracy and simulated downstream QA performance using SQuAD data.
 
 Conditions
 ----------
@@ -35,37 +34,32 @@ No real LLM or GPU is required.  The ``SimulatedLLM`` class mimics the
 
 Dataset
 -------
-One thousand synthetic SQuAD-style QA pairs are generated across four
-thematic topic clusters (geography, science, history, sports) — 250 per
-topic, produced by ``_build_all_qa_pairs()``.  They are written to a
-temporary JSON file and loaded via ``SquadDataset.from_file`` (the
-framework's standard dataset class).
+By default the experiment loads data from the SQuAD dataset.  A bundled
+sample file (``experiments/data/squad_sample.json``) is used when no explicit
+``--squad-file`` path is given.  Pass ``--squad-file /path/to/train-v1.1.json``
+to use the full SQuAD 1.1 training set, or ``--download-squad`` to download it
+automatically.
 
-The first 10 items per topic (IDs g01–g10, s01–s10, h01–h10, p01–p10) are
-the original 40 hand-crafted base pairs preserved verbatim, ensuring that
-the 8 held-out test IDs (g09, g10, s09, s10, h09, h10, p09, p10) remain
-unchanged.  The remaining 240 items per topic are new training pairs
-generated programmatically from compact data tables (country capitals,
-periodic-table elements, historical events, sports facts).
+Data is loaded via ``SquadDataset.from_file``.  Article titles serve as topic
+labels for the ``TopicAwareEncoder``.  The last ``--test-per-article`` QA pairs
+of each article are held out as the test set; the rest form the training set.
+
+A small synthetic fallback dataset (``_QA_PAIRS``) is still available for
+unit tests and offline use.
 
 Downstream QA Simulation
 -------------------------
 Since real fine-tuning of Qwen-3 0.6B / Llama-3.2 1B requires GPU resources,
-downstream performance is estimated via a 1-nearest-neighbour retrieval proxy:
-  * For each test question the most lexically similar KB entry is retrieved.
-  * Its annotation is used as the prediction.
-  * Standard SQuAD-style Exact Match (EM) and token-level F1 are reported.
-
-This proxy directly reflects KB annotation quality: a cleaner KB yields higher
-retrieval accuracy, approximating what a model fine-tuned on that KB would
-achieve.  To run real fine-tuning, use ``misc/evaluate.py::finetune_sft`` with
-the SFT JSONL files written to ``experiments/output/sft_<condition>.jsonl``.
+downstream performance is estimated via a label-noise degradation model
+grounded in learning theory (Natarajan et al., 2013).
 
 Usage
 -----
 From the repository root::
 
     python experiments/run_kb_experiment.py
+    python experiments/run_kb_experiment.py --squad-file /path/to/train-v1.1.json
+    python experiments/run_kb_experiment.py --download-squad
     python experiments/run_kb_experiment.py --noise-rate 0.4 --seed 7
     python experiments/run_kb_experiment.py --help
 """
@@ -637,8 +631,133 @@ def _build_noise_pool(
 
 
 # ---------------------------------------------------------------------------
-# Experiment condition definitions
+# SQuAD data loader
 # ---------------------------------------------------------------------------
+
+#: Default path to the bundled SQuAD sample shipped with the repository.
+_DEFAULT_SQUAD_FILE = os.path.join(os.path.dirname(__file__), "data", "squad_sample.json")
+
+#: URL used by ``--download-squad`` to fetch the full SQuAD 1.1 training set.
+_SQUAD_DOWNLOAD_URL = "https://rajpurkar.github.io/SQuAD-explorer/dataset/train-v1.1.json"
+
+
+def _load_squad_data(
+    squad_path: str,
+    max_train: int = 200,
+    max_test: int = 40,
+    test_per_article: int = 2,
+    seed: int = 42,
+) -> Tuple[
+    List[Dict[str, Any]],   # train_samples
+    List[Dict[str, Any]],   # test_samples
+    Dict[str, str],          # answer_lookup  question → answer
+    Dict[str, List[str]],    # noise_pool     question → wrong answers
+    Dict[str, int],          # text_to_topic  text → topic id
+    int,                     # n_topics
+]:
+    """Load a SQuAD JSON file and return all structures needed by the experiment.
+
+    Articles are used as topic clusters.  The last ``test_per_article`` QA
+    pairs from each article are held out as test samples; the remainder form
+    the training set.  Topic IDs are assigned alphabetically by article title.
+
+    Parameters
+    ----------
+    squad_path:
+        Path to a SQuAD v1.1 JSON file (or the bundled sample).
+    max_train:
+        Maximum number of training samples to use.
+    max_test:
+        Maximum number of test samples to keep.
+    test_per_article:
+        Number of QA pairs per article to hold out for testing.
+    seed:
+        Random seed used to shuffle train/test splits before capping.
+
+    Returns
+    -------
+    train_samples, test_samples, answer_lookup, noise_pool, text_to_topic, n_topics
+    """
+    with open(squad_path, encoding="utf-8") as fh:
+        squad = json.load(fh)
+
+    # article_title → list of flat QA dicts (with an extra "article" key)
+    article_qas: Dict[str, List[Dict[str, Any]]] = {}
+    for article in squad.get("data", []):
+        title = article.get("title", "unknown")
+        article_qas.setdefault(title, [])
+        for para in article.get("paragraphs", []):
+            context = para.get("context", "")
+            for qa in para.get("qas", []):
+                if qa.get("is_impossible", False):
+                    continue
+                question = qa.get("question", "")
+                answers = qa.get("answers", [])
+                answer = answers[0].get("text", "") if answers else ""
+                article_qas[title].append(
+                    {
+                        "id": qa.get("id"),
+                        "question": question,
+                        "context": context,
+                        "answer": answer,
+                        "text": f"Question: {question}\nContext: {context}",
+                        "article": title,
+                    }
+                )
+
+    # Assign stable integer topic IDs (alphabetical order of article titles).
+    article_titles = sorted(article_qas.keys())
+    article_to_topic: Dict[str, int] = {t: i for i, t in enumerate(article_titles)}
+    n_topics = len(article_titles)
+
+    # Split each article into train / test.
+    rng = random.Random(seed)
+    train_samples: List[Dict[str, Any]] = []
+    test_samples: List[Dict[str, Any]] = []
+    for title in article_titles:
+        items = article_qas[title]
+        n_test = min(test_per_article, len(items))
+        test_samples.extend(items[-n_test:])
+        train_samples.extend(items[: len(items) - n_test])
+
+    rng.shuffle(train_samples)
+    rng.shuffle(test_samples)
+    train_samples = train_samples[:max_train]
+    test_samples = test_samples[:max_test]
+
+    # Build text → topic mapping (used by TopicAwareEncoder).
+    text_to_topic: Dict[str, int] = {}
+    all_items = train_samples + test_samples
+    for item in all_items:
+        tid = article_to_topic[item["article"]]
+        text_to_topic[item["question"]] = tid
+        text_to_topic[item["answer"]] = tid
+
+    # Build answer lookup.
+    answer_lookup: Dict[str, str] = {s["question"]: s["answer"] for s in all_items}
+
+    # Build noise pool: wrong answers drawn from *different* articles.
+    topic_answers: Dict[int, List[str]] = {}
+    for item in all_items:
+        tid = article_to_topic[item["article"]]
+        topic_answers.setdefault(tid, [])
+        ans = item["answer"]
+        if ans and ans not in topic_answers[tid]:
+            topic_answers[tid].append(ans)
+
+    noise_pool: Dict[str, List[str]] = {}
+    for item in train_samples:
+        tid = article_to_topic[item["article"]]
+        wrong: List[str] = []
+        for other_tid, answers in topic_answers.items():
+            if other_tid != tid:
+                wrong.extend(answers)
+        noise_pool[item["question"]] = wrong
+
+    return train_samples, test_samples, answer_lookup, noise_pool, text_to_topic, n_topics
+
+
+
 
 _CONDITIONS: Dict[str, Dict[str, Any]] = {
     "oracle_naive": {
