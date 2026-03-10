@@ -35,10 +35,18 @@ No real LLM or GPU is required.  The ``SimulatedLLM`` class mimics the
 
 Dataset
 -------
-Forty synthetic SQuAD-style QA pairs are embedded in this script across four
-thematic topic clusters (geography, science, history, sports).  They are
-written to a temporary JSON file and loaded via ``SquadDataset.from_file``
-(the framework's standard dataset class).
+One thousand synthetic SQuAD-style QA pairs are generated across four
+thematic topic clusters (geography, science, history, sports) — 250 per
+topic, produced by ``_build_all_qa_pairs()``.  They are written to a
+temporary JSON file and loaded via ``SquadDataset.from_file`` (the
+framework's standard dataset class).
+
+The first 10 items per topic (IDs g01–g10, s01–s10, h01–h10, p01–p10) are
+the original 40 hand-crafted base pairs preserved verbatim, ensuring that
+the 8 held-out test IDs (g09, g10, s09, s10, h09, h10, p09, p10) remain
+unchanged.  The remaining 240 items per topic are new training pairs
+generated programmatically from compact data tables (country capitals,
+periodic-table elements, historical events, sports facts).
 
 Downstream QA Simulation
 -------------------------
