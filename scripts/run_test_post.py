@@ -3,7 +3,7 @@ import requests, json
 payload={
   "nodes":[
     {"id":"n1","type":"LoadData","data":{"label":"LoadData","params":{"samples":[{"id":"s1","question":"What is AI?","context":""}]}}},
-    {"id":"n2","type":"Annotate","data":{"label":"Annotate","params":{"candidate_llms":["gpt2"],"llm_mode":"local","task_class":"tasks.qa.QATask"}}},
+    {"id":"n2","type":"Annotate","data":{"label":"Annotate","params":{"candidate_llms":["Qwen/Qwen2.5-3B-Instruct","Qwen/Qwen2.5-7B-Instruct","Qwen/Qwen2.5-14B-Instruct"],"llm_mode":"local","task_class":"tasks.qa.QATask"}}},
     {"id":"n3","type":"Output","data":{"label":"Output","params":{}}}
   ],
   "edges":[{"source":"n1","target":"n2"},{"source":"n2","target":"n3"}]

@@ -432,10 +432,6 @@ class TestAPILLMLogprobs(unittest.TestCase):
         self.assertIsNone(avg_lp)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # ---------------------------------------------------------------------------
 # VectorKnowledgeBase – datasets shadowing fix
 # ---------------------------------------------------------------------------

@@ -606,5 +606,58 @@ class TestAnnotatorCandidateLLMs(unittest.TestCase):
         self.assertEqual(len(model_b.calls), 0)
 
 
+# ===========================================================================
+# 5. DEFAULT_CANDIDATE_LLMS constant tests
+# ===========================================================================
+
+class TestDefaultCandidateLLMs(unittest.TestCase):
+    """Verify that the default candidate LLMs constant is correctly set to the
+    three Qwen2.5 models in both the pipeline (test.py) and the API server."""
+
+    def test_default_candidate_llms_in_test_module(self):
+        """test.py must export DEFAULT_CANDIDATE_LLMS with the three Qwen models."""
+        import test as pipeline_module
+        self.assertTrue(
+            hasattr(pipeline_module, 'DEFAULT_CANDIDATE_LLMS'),
+            "test.py must define DEFAULT_CANDIDATE_LLMS",
+        )
+        self.assertEqual(
+            pipeline_module.DEFAULT_CANDIDATE_LLMS,
+            [
+                "Qwen/Qwen2.5-3B-Instruct",
+                "Qwen/Qwen2.5-7B-Instruct",
+                "Qwen/Qwen2.5-14B-Instruct",
+            ],
+        )
+
+    def test_default_candidate_llms_in_server_module(self):
+        """api/server.py must export DEFAULT_CANDIDATE_LLMS with the three Qwen models."""
+        import importlib
+        server = importlib.import_module('api.server')
+        self.assertTrue(
+            hasattr(server, 'DEFAULT_CANDIDATE_LLMS'),
+            "api/server.py must define DEFAULT_CANDIDATE_LLMS",
+        )
+        self.assertEqual(
+            server.DEFAULT_CANDIDATE_LLMS,
+            [
+                "Qwen/Qwen2.5-3B-Instruct",
+                "Qwen/Qwen2.5-7B-Instruct",
+                "Qwen/Qwen2.5-14B-Instruct",
+            ],
+        )
+
+    def test_both_constants_are_identical(self):
+        """The DEFAULT_CANDIDATE_LLMS in test.py and api/server.py must match."""
+        import test as pipeline_module
+        import importlib
+        server = importlib.import_module('api.server')
+        self.assertEqual(
+            pipeline_module.DEFAULT_CANDIDATE_LLMS,
+            server.DEFAULT_CANDIDATE_LLMS,
+            "DEFAULT_CANDIDATE_LLMS must be identical in test.py and api/server.py",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

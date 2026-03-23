@@ -24,11 +24,11 @@ const initialNodes = [
   // Left column: input nodes
   { id: 'n1', type: 'compact', position: { x: 60,  y: 60  }, data: { label: 'LoadData',      params: { dataset: 'squad', max_samples: 200 } } },
   { id: 'n2', type: 'compact', position: { x: 60,  y: 230 }, data: { label: 'Task',           params: { task_class: 'tasks.qa.QATask' } } },
-  { id: 'n3', type: 'compact', position: { x: 60,  y: 400 }, data: { label: 'CandidateLLMs', params: { candidate_llms: ['gpt2', 'distilgpt2'] } } },
+  { id: 'n3', type: 'compact', position: { x: 60,  y: 400 }, data: { label: 'CandidateLLMs', params: { candidate_llms: ['Qwen/Qwen2.5-3B-Instruct', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen2.5-14B-Instruct'] } } },
   // Pipeline row
   { id: 'n4', type: 'compact', position: { x: 320, y: 230 }, data: { label: 'Filter',    params: { filter_class: 'filters.al_filter.ActiveLearningFilter', filter_params: { method: 'alps', budget: 100, batch_size: 20 } } } },
-  { id: 'n5', type: 'compact', position: { x: 530, y: 230 }, data: { label: 'Router',    params: { router_class: 'routers.knn_router.KNNRouter', router_params: { k: 5 }, candidate_llms: ['gpt2', 'distilgpt2'] } } },
-  { id: 'n6', type: 'compact', position: { x: 740, y: 230 }, data: { label: 'Annotate',  params: { candidate_llms: ['gpt2', 'distilgpt2'], llm_mode: 'local', task_class: 'tasks.qa.QATask' } } },
+  { id: 'n5', type: 'compact', position: { x: 530, y: 230 }, data: { label: 'Router',    params: { router_class: 'routers.knn_router.KNNRouter', router_params: { k: 5 }, candidate_llms: ['Qwen/Qwen2.5-3B-Instruct', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen2.5-14B-Instruct'] } } },
+  { id: 'n6', type: 'compact', position: { x: 740, y: 230 }, data: { label: 'Annotate',  params: { candidate_llms: ['Qwen/Qwen2.5-3B-Instruct', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen2.5-14B-Instruct'], llm_mode: 'local', task_class: 'tasks.qa.QATask' } } },
   { id: 'n7', type: 'compact', position: { x: 950, y: 230 }, data: { label: 'Output',    params: { path: 'out/annotations.json' } } },
 ];
 
