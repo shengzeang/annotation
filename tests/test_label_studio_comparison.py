@@ -523,5 +523,264 @@ class TestPrintResultsTable(unittest.TestCase):
         self.assertIn("3-Oracle Majority Vote", output)
 
 
+# ---------------------------------------------------------------------------
+# LLM dispatch tests (candidate_llms equivalent for this script)
+#
+# These tests verify that:
+#   - oracle_llm is the LLM object called during oracle conditions
+#   - dataflow_llm is the LLM object called during DataFlow conditions
+#   - oracle_llm and dataflow_llm can be different objects
+#   - call counts match the expected number of generate() calls
+# ---------------------------------------------------------------------------
+
+class _TrackingLLM:
+    """Records every generate() call so tests can assert which LLM was used
+    and how many times it was invoked."""
+
+    def __init__(self, name: str, answer: str = "test_answer") -> None:
+        self.name = name
+        self.calls: list = []
+        self._answer = answer
+
+    def generate(self, prompt: str, **kw) -> str:
+        self.calls.append(prompt)
+        return f"Answer: {self._answer} Confidence: 0.9"
+
+    def generate_with_logprobs(self, prompt: str, **kw):
+        return self.generate(prompt), -0.2
+
+
+class TestLLMDispatch(unittest.TestCase):
+    """Verify that oracle_llm / dataflow_llm objects are dispatched correctly."""
+
+    def setUp(self):
+        self.dataset = _make_dataset(n=5)
+        self.task = _MockTask()
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _run(self, oracle_llm, dataflow_llm):
+        return run_experiment(
+            dataset=self.dataset,
+            oracle_llm=oracle_llm,
+            dataflow_llm=dataflow_llm,
+            output_dir=self.tmp_dir,
+            skip_finetune=True,
+            oracle_task=self.task,
+            dataflow_task=self.task,
+        )
+
+    # ------------------------------------------------------------------
+    # oracle_llm dispatch
+    # ------------------------------------------------------------------
+
+    def test_oracle_llm_is_called_for_single_oracle_condition(self):
+        """oracle_llm must receive generate() calls during the Single Oracle condition."""
+        oracle = _TrackingLLM("oracle")
+        dataflow = _TrackingLLM("dataflow")
+        self._run(oracle, dataflow)
+        # Single Oracle: 1 call × n_samples
+        # 3-Oracle Majority Vote: 3 calls × n_samples
+        # Total oracle calls: 4 × n_samples
+        self.assertGreater(len(oracle.calls), 0,
+                           "oracle_llm must be called at least once")
+
+    def test_oracle_llm_called_4x_per_sample(self):
+        """Single Oracle (1 call) + 3-Oracle Majority Vote (3 calls) = 4 oracle
+        generate() calls per sample."""
+        n = len(self.dataset)
+        oracle = _TrackingLLM("oracle")
+        dataflow = _TrackingLLM("dataflow")
+        self._run(oracle, dataflow)
+        self.assertEqual(len(oracle.calls), 4 * n,
+                         f"Expected {4 * n} oracle calls (1+3 per sample), "
+                         f"got {len(oracle.calls)}")
+
+    def test_dataflow_llm_called_3x_per_sample(self):
+        """Three DataFlow conditions (naive, KB+RAG, full) → 3 generate() calls
+        per sample from the dataflow_llm."""
+        n = len(self.dataset)
+        oracle = _TrackingLLM("oracle")
+        dataflow = _TrackingLLM("dataflow")
+        self._run(oracle, dataflow)
+        self.assertEqual(len(dataflow.calls), 3 * n,
+                         f"Expected {3 * n} dataflow calls, got {len(dataflow.calls)}")
+
+    def test_oracle_llm_not_used_for_dataflow_conditions(self):
+        """oracle_llm must NOT be called more times than the oracle conditions
+        require.  DataFlow conditions must NOT use the oracle object."""
+        n = len(self.dataset)
+        oracle = _TrackingLLM("oracle")
+        dataflow = _TrackingLLM("dataflow")
+        self._run(oracle, dataflow)
+        # Oracle conditions: 1 (single) + 3 (majority) = 4 calls per sample
+        # If oracle_llm is accidentally used for dataflow, call count > 4n
+        self.assertEqual(len(oracle.calls), 4 * n,
+                         "oracle_llm should not be called by DataFlow conditions")
+
+    def test_dataflow_llm_not_used_for_oracle_conditions(self):
+        """dataflow_llm must NOT be called for oracle conditions."""
+        n = len(self.dataset)
+        oracle = _TrackingLLM("oracle")
+        dataflow = _TrackingLLM("dataflow")
+        self._run(oracle, dataflow)
+        # DataFlow conditions: naive + KB+RAG + full = 3 calls per sample
+        self.assertEqual(len(dataflow.calls), 3 * n,
+                         "dataflow_llm should not be called by oracle conditions")
+
+    def test_same_llm_for_oracle_and_dataflow_is_accepted(self):
+        """run_experiment must work correctly when oracle_llm == dataflow_llm
+        (the script supports sharing one model instance)."""
+        shared = _TrackingLLM("shared")
+        results = self._run(shared, shared)
+        n = len(self.dataset)
+        # total calls: oracle (4n) + dataflow (3n) = 7n
+        self.assertEqual(len(shared.calls), 7 * n)
+        self.assertEqual(len(results), 5)
+
+    def test_two_independent_llm_objects_both_called(self):
+        """Both oracle_llm and dataflow_llm must be called when they are
+        different objects — neither should be zero-call."""
+        oracle = _TrackingLLM("oracle")
+        dataflow = _TrackingLLM("dataflow")
+        self._run(oracle, dataflow)
+        self.assertGreater(len(oracle.calls), 0, "oracle_llm must be called")
+        self.assertGreater(len(dataflow.calls), 0, "dataflow_llm must be called")
+
+    # ------------------------------------------------------------------
+    # OracleAnnotator call counting (unit level)
+    # ------------------------------------------------------------------
+
+    def test_single_oracle_annotator_calls_llm_n_times(self):
+        """OracleAnnotator(num_oracles=1) should call generate() exactly
+        once per sample."""
+        llm = _TrackingLLM("oracle")
+        oa = OracleAnnotator(llm, num_oracles=1, task=self.task)
+        n = 7
+        dataset = _make_dataset(n=n)
+        oa.annotate_dataset(dataset)
+        self.assertEqual(len(llm.calls), n)
+
+    def test_three_oracle_annotator_calls_llm_3n_times(self):
+        """OracleAnnotator(num_oracles=3) should call generate() exactly
+        3 × n_samples times."""
+        llm = _TrackingLLM("oracle")
+        oa = OracleAnnotator(llm, num_oracles=3, task=self.task)
+        n = 4
+        dataset = _make_dataset(n=n)
+        oa.annotate_dataset(dataset)
+        self.assertEqual(len(llm.calls), 3 * n)
+
+    def test_oracle_annotate_result_preserves_sample_keys(self):
+        """annotate_dataset must preserve all original sample keys and add
+        'annotation'."""
+        llm = _TrackingLLM("oracle")
+        oa = OracleAnnotator(llm, num_oracles=1, task=self.task)
+        sample = {"id": "x", "question": "Q?", "context": "C", "answer": "A",
+                  "text": "Q?"}
+        results = oa.annotate_dataset([sample])
+        self.assertEqual(len(results), 1)
+        result = results[0]
+        for key in ("id", "question", "context", "answer", "text", "annotation"):
+            self.assertIn(key, result, f"key '{key}' missing from result")
+
+    # ------------------------------------------------------------------
+    # run_dataflow_condition — LLM is called for every sample
+    # ------------------------------------------------------------------
+
+    def test_dataflow_condition_calls_llm_once_per_sample(self):
+        """run_dataflow_condition must call llm.generate() exactly n times."""
+        llm = _TrackingLLM("dataflow")
+        dataset = _make_dataset(n=8)
+        run_dataflow_condition(dataset, llm, task=self.task)
+        self.assertEqual(len(llm.calls), 8)
+
+    def test_dataflow_condition_rag_calls_same_llm(self):
+        """RAG mode must use the SAME llm object as non-RAG mode."""
+        llm = _TrackingLLM("dataflow")
+        dataset = _make_dataset(n=6)
+        run_dataflow_condition(dataset, llm, rag=True, task=self.task)
+        self.assertEqual(len(llm.calls), 6,
+                         "RAG mode must still call generate() once per sample")
+
+    def test_dataflow_condition_llm_receives_text(self):
+        """Each generate() call must receive a non-empty prompt string."""
+        llm = _TrackingLLM("dataflow")
+        dataset = _make_dataset(n=3)
+        run_dataflow_condition(dataset, llm, task=self.task)
+        for prompt in llm.calls:
+            self.assertIsInstance(prompt, str)
+            self.assertGreater(len(prompt), 0, "prompt must be non-empty")
+
+    # ------------------------------------------------------------------
+    # Oracle conditions result keys
+    # ------------------------------------------------------------------
+
+    def test_oracle_result_has_annotation_key(self):
+        """Records returned by OracleAnnotator.annotate_dataset must have
+        the 'annotation' key."""
+        llm = _TrackingLLM("oracle")
+        oa = OracleAnnotator(llm, num_oracles=1, task=self.task)
+        results = oa.annotate_dataset(_make_dataset(n=5))
+        for r in results:
+            self.assertIn("annotation", r)
+
+    def test_oracle_annotation_value_is_string(self):
+        """annotation values produced by OracleAnnotator must be strings."""
+        llm = _TrackingLLM("oracle")
+        oa = OracleAnnotator(llm, num_oracles=1, task=self.task)
+        for rec in oa.annotate_dataset(_make_dataset(n=5)):
+            self.assertIsInstance(rec["annotation"], str)
+
+    def test_dataflow_result_has_annotation_confidence_needs_human(self):
+        """run_dataflow_condition records must contain annotation, confidence,
+        and needs_human keys."""
+        llm = _TrackingLLM("dataflow")
+        results = run_dataflow_condition(_make_dataset(n=5), llm, task=self.task)
+        for r in results:
+            self.assertIn("annotation", r)
+            self.assertIn("confidence", r)
+            self.assertIn("needs_human", r)
+
+    def test_run_experiment_oracle_annotation_matches_oracle_llm_output(self):
+        """Oracle conditions must produce annotations derived from oracle_llm's
+        output, not from dataflow_llm's output."""
+        oracle = _TrackingLLM("oracle", answer="oracle_specific_answer")
+        dataflow = _TrackingLLM("dataflow", answer="dataflow_specific_answer")
+        results = self._run(oracle, dataflow)
+
+        # Find the single-oracle SFT file and read annotations
+        single_oracle_result = next(
+            r for r in results if r["condition"] == "Single Oracle"
+        )
+        with open(single_oracle_result["sft_file"], encoding="utf-8") as f:
+            lines = [json.loads(line) for line in f]
+
+        # All oracle annotations should reflect oracle_llm's answer
+        for record in lines:
+            self.assertIn("oracle_specific_answer", record["output"],
+                          "Oracle SFT output must contain oracle LLM's answer")
+
+    def test_run_experiment_dataflow_annotation_matches_dataflow_llm_output(self):
+        """DataFlow conditions must produce annotations derived from
+        dataflow_llm's output, not from oracle_llm's output."""
+        oracle = _TrackingLLM("oracle", answer="oracle_specific_answer")
+        dataflow = _TrackingLLM("dataflow", answer="dataflow_specific_answer")
+        results = self._run(oracle, dataflow)
+
+        naive_result = next(
+            r for r in results if r["condition"] == "DataFlow (naive LLM)"
+        )
+        with open(naive_result["sft_file"], encoding="utf-8") as f:
+            lines = [json.loads(line) for line in f]
+
+        for record in lines:
+            self.assertIn("dataflow_specific_answer", record["output"],
+                          "DataFlow SFT output must contain dataflow LLM's answer")
+
+
 if __name__ == "__main__":
     unittest.main()
