@@ -85,7 +85,7 @@ def compute_token_f1(prediction: str, ground_truth: str) -> float:
 
 
 def compute_exact_match(prediction: str, ground_truth: str) -> float:
-    """Exact-match score (1.0 or 0.0)."""
+    """Return 1.0 if *prediction* matches *ground_truth* (case-insensitive, whitespace-trimmed), else 0.0."""
     return 1.0 if prediction.strip().lower() == ground_truth.strip().lower() else 0.0
 
 
