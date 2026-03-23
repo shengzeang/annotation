@@ -1,36 +1,34 @@
-"""Experiment: Comparing DataFlow-Annotator vs oracle-annotator annotation effects
-using Qwen LLM fine-tuning as the downstream evaluation task.
+"""Experiment: Comparing DataFlow-Annotator vs Label-Studio-style oracle annotation.
 
-This experiment:
-1. Loads SQuAD-format QA samples (or generates synthetic samples when the
-   dataset file is not present).
-2. Annotates data with five conditions using real LLM calls:
-   - Single Oracle            – one call to a large Qwen model per sample
-   - 3-Oracle Majority Vote   – three independent calls, majority vote decides
-   - DataFlow (naive LLM)     – Qwen-7B annotation without KB/RAG
-   - DataFlow (KB + RAG)      – Qwen-7B with in-context KB retrieval
-   - DataFlow (full pipeline) – Qwen-7B with KB retrieval + confidence filter
-3. Measures annotation quality (token-level F1, exact-match vs ground truth).
-4. Optionally fine-tunes a Qwen model on each condition's SFT JSONL using
-   ``misc/evaluate.py`` and reports downstream BLEU / ROUGE-L (requires GPU).
-5. Writes per-condition SFT JSONL files and prints a comparison table.
+This experiment follows the same ``HumanLLMAnnotationSystem`` pipeline pattern
+from ``test.py``:
 
-Usage (CLI)
------------
-    # Annotation only (no GPU required)
+    filter → router.route() → annotator.annotate_batch()
+
+Five conditions are compared:
+
+1. **Single Oracle**          – all samples annotated by the most capable LLM
+                                (no filter/router; models[-1] is used).
+2. **3-Oracle Majority Vote** – three independent oracle annotations resolved
+                                by majority vote.
+3. **DataFlow (naive LLM)**   – ``ActiveLearningFilter`` + ``CascadeRouter`` +
+                                ``Annotator(rag=False)``.
+4. **DataFlow (KB + RAG)**    – same pipeline with ``Annotator(rag=True)``.
+5. **DataFlow (full)**        – same as (4) but with a stricter confidence
+                                threshold (0.75 instead of 0.7).
+
+Usage
+-----
+    # Offline smoke-test (no GPU required)
     python experiments/run_label_studio_comparison.py \\
-        --samples 500 --skip-finetune
+        --samples 200 --skip-llm
 
-    # Full pipeline with Qwen fine-tuning (requires GPU)
+    # Real Qwen annotation (requires GPU)
     python experiments/run_label_studio_comparison.py \\
         --samples 500 \\
-        --squad-path squad_train.json \\
-        --oracle-model  Qwen/Qwen2.5-14B-Instruct \\
-        --dataflow-model Qwen/Qwen2.5-7B-Instruct \\
-        --finetune-model Qwen/Qwen2.5-7B-Instruct \\
-        --val-path validation.json \\
-        --output-dir /tmp/sft_out \\
-        --seed 42
+        --models Qwen/Qwen2.5-3B-Instruct Qwen/Qwen2.5-7B-Instruct Qwen/Qwen2.5-14B-Instruct \\
+        --squad-path path/to/train-v1.1.json \\
+        --output-dir /tmp/lsc_out
 """
 
 from __future__ import annotations
@@ -38,25 +36,26 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import sys
-import tempfile
 from collections import Counter
 from typing import Any, Dict, List, Optional
 
-from tqdm import tqdm
-
 # ---------------------------------------------------------------------------
-# Allow running as a top-level script or via `python -m experiments...`
+# Sys-path fix
 # ---------------------------------------------------------------------------
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
-    sys.path.append(_ROOT)
-
+    sys.path.insert(0, _ROOT)
 
 # ---------------------------------------------------------------------------
-# Constants
+# Repository imports — actual system components
 # ---------------------------------------------------------------------------
+from annotation import Annotator
+from filters import ActiveLearningFilter
+from routers import CascadeRouter
+from tasks.qa import QATask
 
 # Default candidate LLMs — shared with test.py / HumanLLMAnnotationSystem.
 DEFAULT_CANDIDATE_LLMS: List[str] = [
@@ -65,32 +64,49 @@ DEFAULT_CANDIDATE_LLMS: List[str] = [
     "Qwen/Qwen2.5-14B-Instruct",
 ]
 
-DEFAULT_CONFIDENCE: float = 0.5  # fallback when LLM output has no parseable confidence
 
 # ---------------------------------------------------------------------------
-# Token-level QA metrics (no heavy dependencies)
+# Mock LLMs for offline testing
 # ---------------------------------------------------------------------------
 
+class MockAnnotationLLM:
+    """Primary annotation LLM stub.  Returns QATask-parseable output."""
+
+    def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
+        return "Answer: test_answer Confidence: 0.85"
+
+    def generate_with_logprobs(self, prompt: str, max_new_tokens: int = 50):
+        return self.generate(prompt), -0.2
+
+
+class MockJudgeLLM:
+    """Judge LLM stub for CascadeRouter — always keeps the cheap model."""
+
+    def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
+        return "1"
+
+
+# ---------------------------------------------------------------------------
+# QA metrics
+# ---------------------------------------------------------------------------
 
 def _tokenize(text: str) -> List[str]:
-    """Lowercase whitespace tokenizer."""
     return text.lower().split()
 
 
 def compute_token_f1(prediction: str, ground_truth: str) -> float:
-    """Token-level F1 between *prediction* and *ground_truth*."""
-    pred_tokens = _tokenize(prediction)
-    gt_tokens = _tokenize(ground_truth)
-    if not pred_tokens and not gt_tokens:
+    pred_t = _tokenize(prediction)
+    gt_t = _tokenize(ground_truth)
+    if not pred_t and not gt_t:
         return 1.0
-    if not pred_tokens or not gt_tokens:
+    if not pred_t or not gt_t:
         return 0.0
-    common = set(pred_tokens) & set(gt_tokens)
+    common = set(pred_t) & set(gt_t)
     if not common:
         return 0.0
-    precision = len(common) / len(pred_tokens)
-    recall = len(common) / len(gt_tokens)
-    return 2 * precision * recall / (precision + recall)
+    p = len(common) / len(pred_t)
+    r = len(common) / len(gt_t)
+    return 2 * p * r / (p + r)
 
 
 def compute_exact_match(prediction: str, ground_truth: str) -> float:
@@ -98,232 +114,84 @@ def compute_exact_match(prediction: str, ground_truth: str) -> float:
     return 1.0 if prediction.strip().lower() == ground_truth.strip().lower() else 0.0
 
 
-# ---------------------------------------------------------------------------
-# Oracle annotator – wraps a real LLM (e.g. Qwen/Qwen2.5-72B-Instruct)
-# ---------------------------------------------------------------------------
-
-
-class OracleAnnotator:
-    """Oracle annotator that calls a real LLM for every sample.
-
-    Two modes:
-    - ``num_oracles=1``  → "Single Oracle": one LLM call per sample.
-    - ``num_oracles=3``  → "3-Oracle Majority Vote": three independent calls
-      whose answers are resolved by majority vote.
-
-    The oracle LLM should be a high-capability model
-    (e.g. ``Qwen/Qwen2.5-14B-Instruct``) loaded via
-    ``misc.llm_provider.LocalLLM`` or an API-backed equivalent.
-
-    Parameters
-    ----------
-    llm:
-        Any object with a ``generate(prompt, max_new_tokens=…) -> str`` method
-        (satisfies ``misc.llm_provider.LLMBase``).
-    num_oracles:
-        Number of independent LLM calls to make per sample (1 or 3).
-    task:
-        Task object providing ``get_prompt`` / ``parse_output``.  Defaults to
-        a lazily-loaded ``tasks.qa.QATask`` when ``None``.
-    """
-
-    def __init__(
-        self,
-        llm: Any,
-        num_oracles: int = 1,
-        task: Any = None,
-    ) -> None:
-        self.llm = llm
-        self.num_oracles = num_oracles
-        self._task = task  # resolved lazily to avoid heavy imports at module level
-
-    @property
-    def task(self) -> Any:
-        if self._task is None:
-            from tasks.qa import QATask  # lazy import
-            self._task = QATask()
-        return self._task
-
-    def annotate(self, sample: Dict[str, Any]) -> str:
-        """Call the LLM ``num_oracles`` times and return the resolved answer."""
-        prompt = self.task.get_prompt(sample)
-        annotations: List[str] = []
-        for _ in range(self.num_oracles):
-            raw = self.llm.generate(prompt, max_new_tokens=64)
-            parsed = self.task.parse_output(raw)
-            annotations.append(parsed.get("annotation", ""))
-        if self.num_oracles == 1:
-            return annotations[0]
-        # Majority vote across oracle calls
-        counts = Counter(annotations)
-        return counts.most_common(1)[0][0]
-
-    def annotate_dataset(
-        self, dataset: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """Annotate every sample in *dataset* and return augmented records."""
-        results = []
-        for sample in tqdm(dataset, desc=f"Oracle ×{self.num_oracles}", unit="sample", leave=False):
-            annotation = self.annotate(sample)
-            results.append({**sample, "annotation": annotation})
-        return results
-
-
-# ---------------------------------------------------------------------------
-# DataFlow-Annotator condition runner (real LLM, no heavy framework deps)
-# ---------------------------------------------------------------------------
-
-
-def run_dataflow_condition(
-    dataset: List[Dict[str, Any]],
-    llm: Any,
-    rag: bool = False,
-    confidence_threshold: float = 0.65,
-    task: Any = None,
-) -> List[Dict[str, Any]]:
-    """Annotate *dataset* with a DataFlow-style pipeline using a real LLM.
-
-    Parameters
-    ----------
-    dataset:
-        List of sample dicts with at least ``question``, ``context``, and
-        ``answer`` keys.
-    llm:
-        Real LLM instance (``misc.llm_provider.LLMBase`` or compatible).
-        Recommended: ``LocalLLM("Qwen/Qwen2.5-7B-Instruct")``.
-    rag:
-        When ``True``, previously high-confidence annotations are stored in a
-        simple in-memory knowledge base and retrieved as few-shot examples for
-        subsequent samples (keyword-Jaccard retrieval, no heavy dependencies).
-    confidence_threshold:
-        Minimum LLM confidence score for a sample to be auto-accepted;
-        samples below this score are flagged ``needs_human=True``.
-    task:
-        Task object (defaults to lazily-loaded ``tasks.qa.QATask``).
-
-    Returns
-    -------
-    List of dicts – each input sample augmented with ``annotation``,
-    ``confidence``, and ``needs_human`` keys.
-    """
-    if task is None:
-        from tasks.qa import QATask  # lazy import
-        task = QATask()
-
-    kb: List[Dict[str, Any]] = []  # simple in-memory KB for RAG retrieval
-
-    results: List[Dict[str, Any]] = []
-    rag_label = "on" if rag else "off"
-    for sample in tqdm(dataset, desc=f"DataFlow [rag={rag_label}, thr={confidence_threshold:.2f}]", unit="sample", leave=False):
-        # RAG: retrieve similar examples from the in-memory KB
-        rag_examples: List[Dict[str, Any]] = []
-        if rag and kb:
-            q_toks = set(sample.get("question", "").lower().split())
-            scored = []
-            for entry in kb:
-                e_toks = set(entry.get("question", "").lower().split())
-                union = q_toks | e_toks
-                score = len(q_toks & e_toks) / len(union) if union else 0.0
-                scored.append((score, entry))
-            scored.sort(key=lambda x: x[0], reverse=True)
-            rag_examples = [e for _, e in scored[:3]]
-
-        prompt = task.get_prompt(sample, rag_examples if rag else None)
-        raw_output = llm.generate(prompt, max_new_tokens=64)
-        parsed = task.parse_output(raw_output)
-
-        annotation = parsed.get("annotation", "")
-        confidence = parsed.get("confidence", DEFAULT_CONFIDENCE)
-        if not isinstance(confidence, (int, float)):
-            confidence = DEFAULT_CONFIDENCE
-
-        needs_human = float(confidence) < confidence_threshold
-        record = {
-            **sample,
-            "annotation": annotation,
-            "confidence": float(confidence),
-            "needs_human": needs_human,
-        }
-        results.append(record)
-
-        # Admit high-confidence answers to the RAG KB
-        if rag and not needs_human:
-            kb.append(record)
-
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Annotation quality evaluation
-# ---------------------------------------------------------------------------
-
-
-def evaluate_annotation_quality(
-    annotated: List[Dict[str, Any]],
-) -> Dict[str, float]:
+def evaluate_annotation_quality(annotated: List[Dict[str, Any]]) -> Dict[str, float]:
     """Compute mean token-F1 and exact-match of annotations vs ground truth."""
-    f1_scores: List[float] = []
-    em_scores: List[float] = []
-    for rec in annotated:
-        pred = str(rec.get("annotation", ""))
-        gt = str(rec.get("answer", ""))
-        f1_scores.append(compute_token_f1(pred, gt))
-        em_scores.append(compute_exact_match(pred, gt))
-    mean_f1 = sum(f1_scores) / len(f1_scores) if f1_scores else 0.0
-    mean_em = sum(em_scores) / len(em_scores) if em_scores else 0.0
-    return {"annotation_f1": round(mean_f1, 4), "annotation_em": round(mean_em, 4)}
+    f1s = [compute_token_f1(str(r.get("annotation", "")), str(r.get("answer", ""))) for r in annotated]
+    ems = [compute_exact_match(str(r.get("annotation", "")), str(r.get("answer", ""))) for r in annotated]
+    return {
+        "annotation_f1": round(sum(f1s) / len(f1s) if f1s else 0.0, 4),
+        "annotation_em": round(sum(ems) / len(ems) if ems else 0.0, 4),
+    }
 
 
 # ---------------------------------------------------------------------------
-# SFT JSONL writing (shared by all conditions)
+# SFT JSONL
 # ---------------------------------------------------------------------------
 
-
-def write_sft_jsonl(
-    annotated: List[Dict[str, Any]],
-    path: str,
-    skip_human_review: bool = True,
-) -> int:
-    """Write SFT-format JSONL for fine-tuning Qwen (or any causal LM).
-
-    Each line: ``{"instruction": <prompt text>, "output": <annotation>}``.
-
-    Parameters
-    ----------
-    annotated:
-        List of annotated sample dicts (must contain ``text`` and
-        ``annotation`` keys).
-    path:
-        Output file path.
-    skip_human_review:
-        When ``True``, samples marked ``needs_human=True`` are excluded.
-
-    Returns
-    -------
-    Number of records written.
-    """
-    written = 0
+def write_sft_jsonl(annotated: List[Dict[str, Any]], path: str) -> int:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    written = 0
     with open(path, "w", encoding="utf-8") as f:
         for rec in annotated:
-            if skip_human_review and rec.get("needs_human", False):
-                continue
-            line = json.dumps(
-                {
-                    "instruction": rec.get("text", ""),
-                    "output": rec.get("annotation", ""),
-                },
+            f.write(json.dumps(
+                {"instruction": rec.get("text", ""), "output": rec.get("annotation", "")},
                 ensure_ascii=False,
-            )
-            f.write(line + "\n")
+            ) + "\n")
             written += 1
     return written
 
 
 # ---------------------------------------------------------------------------
-# Downstream fine-tuning with Qwen via misc/evaluate.py
+# Dataset helpers
 # ---------------------------------------------------------------------------
 
+def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]]:
+    """Generate a synthetic SQuAD-style dataset for offline testing."""
+    rng = random.Random(seed)
+    topics = [
+        ("Albert Einstein", "Einstein developed the theory of relativity.", "relativity"),
+        ("Python language", "Python is a high-level programming language.", "high-level"),
+        ("Mount Everest", "Mount Everest is the highest mountain.", "highest"),
+        ("Marie Curie", "Marie Curie discovered polonium and radium.", "polonium"),
+        ("The Sun", "The Sun is the star at the center of the Solar System.", "star"),
+        ("Isaac Newton", "Newton formulated the laws of motion.", "motion"),
+        ("William Shakespeare", "Shakespeare wrote plays including Hamlet.", "Hamlet"),
+        ("Leonardo da Vinci", "Da Vinci painted the Mona Lisa.", "Mona Lisa"),
+    ]
+    dataset = []
+    for i in range(n):
+        subj, ctx, ans = topics[i % len(topics)]
+        extra = " ".join([f"word{j}" for j in range(rng.randint(0, 5))])
+        q = f"What is associated with {subj}? (sample {i})"
+        context = ctx + (" " + extra if extra else "")
+        dataset.append({
+            "id": f"synthetic-{i}",
+            "question": q,
+            "context": context,
+            "answer": ans,
+            "text": f"Question: {q}\nContext: {context}",
+        })
+    return dataset
+
+
+def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str, Any]]:
+    """Load SQuAD dataset from *squad_path*; fall back to synthetic data."""
+    if squad_path and os.path.exists(squad_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "qa_datasets",
+            os.path.join(_ROOT, "datasets", "qa_datasets.py"),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        ds = mod.SquadDataset.from_file(squad_path, max_samples=max_samples)
+        return list(ds._data)
+    return _make_synthetic_dataset(n=max_samples)
+
+
+# ---------------------------------------------------------------------------
+# Downstream fine-tuning helper (optional — skipped by default)
+# ---------------------------------------------------------------------------
 
 def run_downstream_finetune(
     sft_path: str,
@@ -333,28 +201,11 @@ def run_downstream_finetune(
     epochs: int = 2,
     batch_size: int = 2,
 ) -> Dict[str, Any]:
-    """Fine-tune *model_name* (a Qwen model) on *sft_path* and evaluate.
+    """Fine-tune *model_name* on *sft_path* and evaluate (requires GPU).
 
-    Delegates to ``misc.evaluate.finetune_sft`` and ``misc.evaluate.evaluate``
-    so that all Qwen-specific fine-tuning logic lives in one place.
-
-    Parameters
-    ----------
-    sft_path:
-        Path to the SFT JSONL file produced by :func:`write_sft_jsonl`.
-    model_name:
-        HuggingFace model identifier for the Qwen model to fine-tune
-        (e.g. ``"Qwen/Qwen2.5-7B-Instruct"``).
-    model_output_dir:
-        Directory where the fine-tuned model checkpoint is saved.
-    val_data_path:
-        Path to a JSON validation file (list of dicts with ``question``,
-        ``context``, ``annotation`` keys) used for BLEU / ROUGE-L evaluation.
-        When ``None``, evaluation is skipped.
-    epochs:
-        Number of training epochs.
-    batch_size:
-        Per-device training batch size.
+    Delegates to ``misc.evaluate.finetune_sft`` and
+    ``misc.evaluate.evaluate`` so that all Qwen fine-tuning logic lives in
+    one place.
 
     Returns
     -------
@@ -375,100 +226,67 @@ def run_downstream_finetune(
 
 
 # ---------------------------------------------------------------------------
-# Dataset helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_synthetic_dataset(n: int = 500, seed: int = 42) -> List[Dict[str, Any]]:
-    """Generate a synthetic SQuAD-style dataset for offline testing."""
-    import random
-    rng = random.Random(seed)
-    topics = [
-        ("Albert Einstein", "Einstein developed the theory of relativity.", "relativity"),
-        ("Python language", "Python is a high-level programming language.", "high-level"),
-        ("Mount Everest", "Mount Everest is the highest mountain.", "highest"),
-        ("Marie Curie", "Marie Curie discovered polonium and radium.", "polonium"),
-        ("Sun", "The Sun is the star at the center of the Solar System.", "star"),
-    ]
-    dataset: List[Dict[str, Any]] = []
-    for i in range(n):
-        subj, ctx, ans = topics[i % len(topics)]
-        question = f"What is associated with {subj}? (sample {i})"
-        dataset.append({
-            "id": f"synthetic-{i}",
-            "question": question,
-            "context": ctx,
-            "answer": ans,
-            "text": f"Question: {question}\nContext: {ctx}",
-        })
-    return dataset
-
-
-def load_squad_dataset(
-    squad_path: str,
-    max_samples: int = 500,
-) -> List[Dict[str, Any]]:
-    """Load SQuAD dataset from *squad_path*; fall back to synthetic data."""
-    if squad_path and os.path.exists(squad_path):
-        spec = __import__(
-            "datasets.qa_datasets",
-            fromlist=["SquadDataset"],
-        )
-        ds = spec.SquadDataset.from_file(squad_path, max_samples=max_samples)
-        return list(ds._data)
-    return _make_synthetic_dataset(n=max_samples)
-
-
-# ---------------------------------------------------------------------------
 # Experiment runner
 # ---------------------------------------------------------------------------
-
 
 def run_experiment(
     dataset: List[Dict[str, Any]],
     oracle_llm: Any,
-    dataflow_llm: Any,
-    output_dir: str = "/tmp/sft_out",
+    judge_llm: Any,
+    output_dir: str = "/tmp/lsc_out",
     skip_finetune: bool = True,
     finetune_model_name: str = "Qwen/Qwen2.5-7B-Instruct",
     val_data_path: Optional[str] = None,
-    oracle_task: Any = None,
-    dataflow_task: Any = None,
+    force_fallback: bool = True,
+    task: Any = None,
+    candidate_llms: Optional[List[str]] = None,
+    llm_dict: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Run all annotation conditions and return a list of result dicts.
+    """Run all five annotation conditions and return a list of result dicts.
+
+    Follows the ``HumanLLMAnnotationSystem`` pipeline pattern:
+    ``filter → router.route() → annotator.annotate_batch()``.
 
     Five conditions are compared:
 
-    1. **Single Oracle** – ``OracleAnnotator(oracle_llm, num_oracles=1)``
-    2. **3-Oracle Majority Vote** – ``OracleAnnotator(oracle_llm, num_oracles=3)``
-    3. **DataFlow (naive LLM)** – ``run_dataflow_condition(rag=False)``
-    4. **DataFlow (KB + RAG)** – ``run_dataflow_condition(rag=True)``
-    5. **DataFlow (full pipeline)** – ``run_dataflow_condition(rag=True)`` with a
-       stricter confidence threshold (tighter quality gate)
+    1. **Single Oracle**          – ``Annotator`` with ``assigned_llm`` fixed to
+                                    the most capable model (last in
+                                    ``candidate_llms``); bypasses filter/router.
+    2. **3-Oracle Majority Vote** – same as (1) but run 3 times; per-sample
+                                    majority vote decides the final annotation.
+    3. **DataFlow (naive LLM)**   – ``ActiveLearningFilter`` + ``CascadeRouter``
+                                    + ``Annotator(rag=False)``.
+    4. **DataFlow (KB + RAG)**    – same pipeline with ``Annotator(rag=True)``.
+    5. **DataFlow (full)**        – same as (4) with ``confidence_threshold=0.75``.
 
     Parameters
     ----------
     dataset:
         QA samples to annotate.
     oracle_llm:
-        Real LLM instance used for oracle conditions (high-capability model
-        such as ``Qwen/Qwen2.5-14B-Instruct``).
-    dataflow_llm:
-        Real LLM instance used for DataFlow conditions (e.g.
-        ``Qwen/Qwen2.5-7B-Instruct``).
+        LLM instance used by the oracle conditions when no ``llm_dict`` is
+        supplied (mock / single-model mode).
+    judge_llm:
+        LLM used as judge by ``CascadeRouter``.
     output_dir:
         Directory for SFT JSONL output and (optionally) fine-tuned models.
     skip_finetune:
-        When ``True`` (default), downstream fine-tuning is skipped and
-        ``downstream_bleu`` / ``downstream_rouge_l`` are ``None``.
+        When ``True`` (default), downstream fine-tuning is skipped.
     finetune_model_name:
         Qwen model to fine-tune when ``skip_finetune=False``.
     val_data_path:
-        Validation JSON path for downstream evaluation.
-    oracle_task:
-        Custom task for oracle conditions (default: ``QATask``).
-    dataflow_task:
-        Custom task for DataFlow conditions (default: ``QATask``).
+        Validation JSON path for downstream BLEU/ROUGE-L evaluation.
+    force_fallback:
+        Passed to ``ActiveLearningFilter`` for offline/CPU mode.
+    task:
+        Task object (default: ``QATask``).
+    candidate_llms:
+        Ordered list of LLM identifiers (first = cheapest, last = most
+        capable).  When provided, ``llm_dict`` must also be supplied.
+        Defaults to the single-entry ``["primary"]`` fallback using
+        ``oracle_llm``.
+    llm_dict:
+        Mapping from LLM identifier to LLM instance.
 
     Returns
     -------
@@ -476,62 +294,116 @@ def run_experiment(
     ``condition``, ``num_samples``, ``annotation_f1``, ``annotation_em``,
     ``downstream_bleu``, ``downstream_rouge_l``, ``sft_file``.
     """
+    if task is None:
+        task = QATask()
     os.makedirs(output_dir, exist_ok=True)
 
-    # Build conditions: (name, annotated_records)
-    conditions: List[tuple] = []
-    _N = 5  # total number of conditions
+    # Use caller-supplied candidate list or fall back to a single "primary"
+    # entry for backward-compatible / mock-mode calls.
+    if candidate_llms is None or llm_dict is None:
+        candidate_llms = ["primary"]
+        llm_dict = {"primary": oracle_llm}
 
-    # -- Oracle conditions (single / 3-oracle majority vote) --
-    print(f"\n[1/{_N}] Running condition: Single Oracle …")
-    single_oracle = OracleAnnotator(oracle_llm, num_oracles=1, task=oracle_task)
-    conditions.append(
-        ("Single Oracle", single_oracle.annotate_dataset(dataset))
+    oracle_name = candidate_llms[-1]  # most capable model
+
+    # ------------------------------------------------------------------ #
+    # Shared filter + router for DataFlow conditions                      #
+    # ------------------------------------------------------------------ #
+    al_filter = ActiveLearningFilter(
+        method="alps",
+        budget=len(dataset),
+        batch_size=max(2, len(dataset) // 10),
+        force_fallback=force_fallback,
     )
+    filtered = al_filter.filter(dataset)
+
+    router = CascadeRouter(
+        judge_llm=judge_llm,
+        candidate_llm=candidate_llms,
+        llm_dict=llm_dict,
+    )
+    routed = router.route(filtered)
+
+    # ------------------------------------------------------------------ #
+    # Helper: annotate with majority vote across N independent runs       #
+    # ------------------------------------------------------------------ #
+    def _oracle_annotate(num_oracles: int, suffix: str) -> List[Dict[str, Any]]:
+        """Annotate *dataset* ``num_oracles`` times, resolve by majority vote."""
+        all_runs: List[List[Dict[str, Any]]] = []
+        for i in range(num_oracles):
+            kb_path = os.path.join(output_dir, f"kb_{suffix}_{i}.json")
+            annotator = Annotator(
+                candidate_llms, llm_dict, task=task, kb_path=kb_path,
+            )
+            all_runs.append(annotator.annotate_batch(dataset, assigned_llm=oracle_name))
+        if num_oracles == 1:
+            return all_runs[0]
+        # Majority vote per sample
+        final: List[Dict[str, Any]] = []
+        for j in range(len(dataset)):
+            votes = [all_runs[i][j].get("annotation", "") for i in range(num_oracles)]
+            winner = Counter(votes).most_common(1)[0][0]
+            merged = dict(all_runs[0][j])
+            merged["annotation"] = winner
+            final.append(merged)
+        return final
+
+    # ------------------------------------------------------------------ #
+    # Define conditions                                                   #
+    # ------------------------------------------------------------------ #
+    _N = 5
+
+    print(f"\n[1/{_N}] Running condition: Single Oracle …")
+    _data_single_oracle = _oracle_annotate(1, "single_oracle")
 
     print(f"\n[2/{_N}] Running condition: 3-Oracle Majority Vote …")
-    three_oracle = OracleAnnotator(oracle_llm, num_oracles=3, task=oracle_task)
-    conditions.append(
-        ("3-Oracle Majority Vote", three_oracle.annotate_dataset(dataset))
-    )
+    _data_three_oracle = _oracle_annotate(3, "three_oracle")
 
-    # -- DataFlow conditions --
     print(f"\n[3/{_N}] Running condition: DataFlow (naive LLM) …")
-    conditions.append((
-        "DataFlow (naive LLM)",
-        run_dataflow_condition(dataset, dataflow_llm, rag=False,
-                               confidence_threshold=0.65, task=dataflow_task),
-    ))
-    print(f"\n[4/{_N}] Running condition: DataFlow (KB + RAG) …")
-    conditions.append((
-        "DataFlow (KB + RAG)",
-        run_dataflow_condition(dataset, dataflow_llm, rag=True,
-                               confidence_threshold=0.65, task=dataflow_task),
-    ))
-    print(f"\n[5/{_N}] Running condition: DataFlow (full pipeline) …")
-    conditions.append((
-        "DataFlow (full pipeline)",
-        run_dataflow_condition(dataset, dataflow_llm, rag=True,
-                               confidence_threshold=0.75, task=dataflow_task),
-    ))
+    _annotator_naive = Annotator(
+        candidate_llms, llm_dict, task=task, rag=False,
+        kb_path=os.path.join(output_dir, "kb_dataflow_naive.json"),
+    )
+    _data_naive = _annotator_naive.annotate_batch(routed)
 
+    print(f"\n[4/{_N}] Running condition: DataFlow (KB + RAG) …")
+    _annotator_rag = Annotator(
+        candidate_llms, llm_dict, task=task, rag=True,
+        kb_path=os.path.join(output_dir, "kb_dataflow_rag.json"),
+    )
+    _data_rag = _annotator_rag.annotate_batch(routed)
+
+    print(f"\n[5/{_N}] Running condition: DataFlow (full pipeline) …")
+    _annotator_full = Annotator(
+        candidate_llms, llm_dict, task=task, rag=True,
+        confidence_threshold=0.75,
+        kb_path=os.path.join(output_dir, "kb_dataflow_full.json"),
+    )
+    _data_full = _annotator_full.annotate_batch(routed)
+
+    conditions_data = [
+        ("Single Oracle",          _data_single_oracle),
+        ("3-Oracle Majority Vote", _data_three_oracle),
+        ("DataFlow (naive LLM)",   _data_naive),
+        ("DataFlow (KB + RAG)",    _data_rag),
+        ("DataFlow (full pipeline)", _data_full),
+    ]
+
+    # ------------------------------------------------------------------ #
+    # Evaluate and collect results                                        #
+    # ------------------------------------------------------------------ #
     results: List[Dict[str, Any]] = []
-    for cond_name, annotated in conditions:
-        # --- Annotation quality ---
+    for cond_name, annotated in conditions_data:
         quality = evaluate_annotation_quality(annotated)
 
-        # --- SFT JSONL ---
-        safe_name = re.sub(r"[() +]", "_", cond_name.lower()).strip("_")
-        sft_path = os.path.join(output_dir, f"sft_{safe_name}.jsonl")
-        n_written = write_sft_jsonl(annotated, sft_path, skip_human_review=False)
+        safe_name = re.sub(r"[() /\-]", "_", cond_name.lower()).strip("_")
+        sft_path = os.path.join(output_dir, f"sft_lsc_{safe_name}.jsonl")
+        n_written = write_sft_jsonl(annotated, sft_path)
 
-        # --- Downstream fine-tuning with Qwen ---
         downstream_bleu: Optional[float] = None
         downstream_rouge_l: Optional[float] = None
         if not skip_finetune:
-            model_dir = os.path.join(
-                output_dir, f"qwen_sft_{safe_name}"
-            )
+            model_dir = os.path.join(output_dir, f"qwen_sft_{safe_name}")
             ft_result = run_downstream_finetune(
                 sft_path=sft_path,
                 model_name=finetune_model_name,
@@ -558,12 +430,9 @@ def run_experiment(
 # Reporting
 # ---------------------------------------------------------------------------
 
-
 def print_results_table(results: List[Dict[str, Any]]) -> None:
     """Print a formatted comparison table to stdout."""
-    has_downstream = any(
-        r.get("downstream_bleu") is not None for r in results
-    )
+    has_downstream = any(r.get("downstream_bleu") is not None for r in results)
     if has_downstream:
         header = (
             f"{'Condition':<35} {'Ann-F1':>7} {'Ann-EM':>7} "
@@ -576,8 +445,9 @@ def print_results_table(results: List[Dict[str, Any]]) -> None:
     sep = "-" * len(header)
     print("\n" + sep)
     print("  DataFlow-Annotator vs Oracle — QA Annotation Comparison (Qwen)")
+    print("  (conditions 3-5 use ActiveLearningFilter + CascadeRouter + Annotator)")
     if not has_downstream:
-        print("  (Downstream metrics skipped; re-run without --skip-finetune for Qwen SFT eval)")
+        print("  (downstream metrics skipped; re-run without --skip-finetune for Qwen SFT eval)")
     print(sep)
     print(header)
     print(sep)
@@ -607,7 +477,6 @@ def print_results_table(results: List[Dict[str, Any]]) -> None:
 # CLI entry point
 # ---------------------------------------------------------------------------
 
-
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -616,20 +485,22 @@ def main(argv: Optional[List[str]] = None) -> None:
         )
     )
     parser.add_argument(
-        "--samples", type=int, default=500,
-        help="Number of QA samples (default: 500)",
+        "--samples", type=int, default=200,
+        help="Number of QA samples (default: 200)",
     )
     parser.add_argument(
         "--squad-path", default="squad_train.json",
         help="SQuAD training JSON path; falls back to synthetic data if absent",
     )
     parser.add_argument(
-        "--oracle-model", default="Qwen/Qwen2.5-14B-Instruct",
-        help="HuggingFace model name for oracle LLM (default: Qwen2.5-14B-Instruct)",
+        "--models",
+        nargs="+",
+        default=DEFAULT_CANDIDATE_LLMS,
+        help="Candidate LLMs (first = cheapest, last = oracle). Default: the 3 standard Qwen models.",
     )
     parser.add_argument(
-        "--dataflow-model", default="Qwen/Qwen2.5-7B-Instruct",
-        help="HuggingFace model name for DataFlow LLM (default: Qwen2.5-7B-Instruct)",
+        "--judge-model", default=None,
+        help="Judge LLM for CascadeRouter (defaults to last --models entry)",
     )
     parser.add_argument(
         "--finetune-model", default="Qwen/Qwen2.5-7B-Instruct",
@@ -640,12 +511,16 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="Validation JSON path for downstream BLEU/ROUGE-L evaluation",
     )
     parser.add_argument(
-        "--output-dir", default="/tmp/sft_out",
-        help="Directory for SFT JSONL files and model checkpoints (default: /tmp/sft_out)",
+        "--output-dir", default="/tmp/lsc_out",
+        help="Directory for SFT JSONL files and model checkpoints (default: /tmp/lsc_out)",
     )
     parser.add_argument(
         "--skip-finetune", action="store_true",
         help="Skip Qwen fine-tuning; report annotation quality only",
+    )
+    parser.add_argument(
+        "--skip-llm", action="store_true",
+        help="Use mock LLMs for offline testing (no GPU / network required)",
     )
     parser.add_argument(
         "--seed", type=int, default=42,
@@ -657,34 +532,41 @@ def main(argv: Optional[List[str]] = None) -> None:
     dataset = load_squad_dataset(args.squad_path, max_samples=args.samples)
     print(f"Loaded {len(dataset)} samples.")
 
-    # --- Instantiate real Qwen LLMs ---
-    from misc.llm_provider import LocalLLM
-
-    print(f"Loading oracle LLM: {args.oracle_model}")
-    oracle_llm = LocalLLM(args.oracle_model)
-    # LocalLLM is stateless after construction (model weights are frozen),
-    # so sharing one instance between oracle and DataFlow conditions is safe
-    # when both point to the same model name.
-    if args.oracle_model == args.dataflow_model:
-        dataflow_llm = oracle_llm
+    if args.skip_llm:
+        print("Using mock LLMs (--skip-llm)")
+        oracle_llm: Any = MockAnnotationLLM()
+        judge_llm: Any = MockJudgeLLM()
+        force_fallback = True
+        _candidate_llms = None
+        _llm_dict = None
     else:
-        print(f"Loading DataFlow LLM: {args.dataflow_model}")
-        dataflow_llm = LocalLLM(args.dataflow_model)
+        from misc.llm_provider import LocalLLM
+        models = args.models
+        print(f"Loading LLMs: {models}")
+        _llm_dict = {m: LocalLLM(m) for m in models}
+        _candidate_llms = models
+        oracle_llm = _llm_dict[models[-1]]
+        judge_name = args.judge_model or models[-1]
+        judge_llm = _llm_dict.get(judge_name) or LocalLLM(judge_name)
+        force_fallback = False
 
     print("Running annotation conditions…")
     results = run_experiment(
         dataset=dataset,
         oracle_llm=oracle_llm,
-        dataflow_llm=dataflow_llm,
+        judge_llm=judge_llm,
         output_dir=args.output_dir,
         skip_finetune=args.skip_finetune,
         finetune_model_name=args.finetune_model,
         val_data_path=args.val_path,
+        force_fallback=force_fallback,
+        candidate_llms=_candidate_llms,
+        llm_dict=_llm_dict,
     )
 
     print_results_table(results)
 
-    summary_path = os.path.join(args.output_dir, "comparison_summary.json")
+    summary_path = os.path.join(args.output_dir, "lsc_summary.json")
     os.makedirs(args.output_dir, exist_ok=True)
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
