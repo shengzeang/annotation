@@ -25,7 +25,7 @@ Usage (CLI)
     python experiments/run_label_studio_comparison.py \\
         --samples 500 \\
         --squad-path squad_train.json \\
-        --oracle-model  Qwen/Qwen2.5-72B-Instruct \\
+        --oracle-model  Qwen/Qwen2.5-14B-Instruct \\
         --dataflow-model Qwen/Qwen2.5-7B-Instruct \\
         --finetune-model Qwen/Qwen2.5-7B-Instruct \\
         --val-path validation.json \\
@@ -57,6 +57,13 @@ if _ROOT not in sys.path:
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+
+# Default candidate LLMs — shared with test.py / HumanLLMAnnotationSystem.
+DEFAULT_CANDIDATE_LLMS: List[str] = [
+    "Qwen/Qwen2.5-3B-Instruct",
+    "Qwen/Qwen2.5-7B-Instruct",
+    "Qwen/Qwen2.5-14B-Instruct",
+]
 
 DEFAULT_CONFIDENCE: float = 0.5  # fallback when LLM output has no parseable confidence
 
@@ -105,7 +112,7 @@ class OracleAnnotator:
       whose answers are resolved by majority vote.
 
     The oracle LLM should be a high-capability model
-    (e.g. ``Qwen/Qwen2.5-72B-Instruct``) loaded via
+    (e.g. ``Qwen/Qwen2.5-14B-Instruct``) loaded via
     ``misc.llm_provider.LocalLLM`` or an API-backed equivalent.
 
     Parameters
@@ -445,7 +452,7 @@ def run_experiment(
         QA samples to annotate.
     oracle_llm:
         Real LLM instance used for oracle conditions (high-capability model
-        such as ``Qwen/Qwen2.5-72B-Instruct``).
+        such as ``Qwen/Qwen2.5-14B-Instruct``).
     dataflow_llm:
         Real LLM instance used for DataFlow conditions (e.g.
         ``Qwen/Qwen2.5-7B-Instruct``).
@@ -617,8 +624,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="SQuAD training JSON path; falls back to synthetic data if absent",
     )
     parser.add_argument(
-        "--oracle-model", default="Qwen/Qwen2.5-72B-Instruct",
-        help="HuggingFace model name for oracle LLM (default: Qwen2.5-72B-Instruct)",
+        "--oracle-model", default="Qwen/Qwen2.5-14B-Instruct",
+        help="HuggingFace model name for oracle LLM (default: Qwen2.5-14B-Instruct)",
     )
     parser.add_argument(
         "--dataflow-model", default="Qwen/Qwen2.5-7B-Instruct",

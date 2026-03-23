@@ -662,9 +662,9 @@ class TestDefaultCandidateLLMs(unittest.TestCase):
         """All experiment scripts must define DEFAULT_CANDIDATE_LLMS identical to
         the full pipeline."""
         import test as pipeline_module
-        from experiments import run_active_learning, run_rag, run_llm_routing
+        from experiments import run_active_learning, run_rag, run_llm_routing, run_label_studio_comparison
         expected = pipeline_module.DEFAULT_CANDIDATE_LLMS
-        for mod in (run_active_learning, run_rag, run_llm_routing):
+        for mod in (run_active_learning, run_rag, run_llm_routing, run_label_studio_comparison):
             self.assertTrue(
                 hasattr(mod, 'DEFAULT_CANDIDATE_LLMS'),
                 f"{mod.__name__} must define DEFAULT_CANDIDATE_LLMS",
