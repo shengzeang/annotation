@@ -12,7 +12,7 @@ from scripts.select_best_route import select_best
 
 
 # ==============================
-# 主流程
+# main process
 # ==============================
 
 class HumanLLMAnnotationSystem:

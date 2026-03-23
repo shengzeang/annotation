@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 def compute_metrics_for_annotations(auto_results: List[Dict[str, Any]], raw_data: List[Dict[str, Any]]):
     """
-    计算自动标注的BLEU-4和ROUGE-1/2/L分数，并打印结果。
+    Compute and log BLEU and ROUGE scores for automatically annotated results.
     """
     id2raw = {str(d.get('id', i)): d for i, d in enumerate(raw_data)}
     bleu_scores = []
@@ -36,16 +36,16 @@ def compute_metrics_for_annotations(auto_results: List[Dict[str, Any]], raw_data
     avg_rouge_1 = sum(rouge_1) / total if total > 0 else 0.0
     avg_rouge_2 = sum(rouge_2) / total if total > 0 else 0.0
     avg_rouge_l = sum(rouge_l) / total if total > 0 else 0.0
-    logger.info("自动标注 BLEU-4: %.4f", avg_bleu)
-    logger.info("自动标注 ROUGE-1: %.4f  ROUGE-2: %.4f  ROUGE-L: %.4f  (共%d条)", avg_rouge_1, avg_rouge_2, avg_rouge_l, total)
+    logger.info("Auto-annotation BLEU-4: %.4f", avg_bleu)
+    logger.info("Auto-annotation ROUGE-1: %.4f  ROUGE-2: %.4f  ROUGE-L: %.4f  (Total %d)", avg_rouge_1, avg_rouge_2, avg_rouge_l, total)
 
 
 def export_annotation_results(results: List[Dict[str, Any]], raw_data: List[Dict[str, Any]], output_path: str = "final_annotation_results.json"):
     """
-    合并标注结果和原始数据, 并导出为JSON文件。
-    :param results: 标注结果列表, 每项为dict, 需包含id字段
-    :param raw_data: 原始数据列表, 每项为dict, 需包含id/question/context/answer等
-    :param output_path: 导出文件路径
+    Merge annotation results with raw data and export to a JSON file.
+    :param results: List of annotation results, each item is a dict and must contain an 'id' field
+    :param raw_data: List of raw data, each item is a dict and must contain 'id', 'question', 'context', 'answer', etc.
+    :param output_path: Path to export the JSON file
     """
     id2raw = {str(d.get('id', i)): d for i, d in enumerate(raw_data)}
     export_data = []
@@ -61,4 +61,4 @@ def export_annotation_results(results: List[Dict[str, Any]], raw_data: List[Dict
         })
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(export_data, f, ensure_ascii=False, indent=2)
-    logger.info("已导出到 %s", output_path)
+    logger.info("Exported to %s", output_path)

@@ -13,7 +13,7 @@ from rag import VectorKnowledgeBase
 
 
 class HumanReviewQueue:
-    """人工复审池"""
+    """Human review queue for samples that fail quality thresholds."""
     def __init__(self):
         self.queue = []
 
@@ -29,7 +29,7 @@ class HumanReviewQueue:
 
 
 class Annotator:
-    """使用 Qwen 进行标注, LLM调用抽象化
+    """Use LLMs to annotate data samples with optional RAG and knowledge base support.
 
     Parameters
     ----------
