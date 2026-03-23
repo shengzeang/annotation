@@ -4,9 +4,6 @@ from tqdm import tqdm
 import json
 import os
 
-from utils import export_annotation_results
-from scripts.select_best_route import select_best
-
 
 class BaseRouter(ABC):
     """Abstract router interface for scoring candidate LLMs.
@@ -35,6 +32,8 @@ class BaseRouter(ABC):
     def route(self, dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """see if the router needs training, if so, train it"""
         if self.if_train and not self.ready:
+            from utils import export_annotation_results  # lazy: only needed for cold-start
+            from scripts.select_best_route import select_best  # lazy: only needed for cold-start
             self.cold_start(
                 raw_dataset=dataset.to_list() if hasattr(dataset, 'to_list') else dataset,
                 annotator=getattr(self, 'annotator', None),
