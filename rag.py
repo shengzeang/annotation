@@ -14,6 +14,7 @@ Replaces the naive JSON-list approach with:
 import json
 import logging
 import os
+import sys
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -51,6 +52,7 @@ class VectorKnowledgeBase:
         self.kb_path = kb_path
         self.encoder_name = encoder_name
         self._encoder = encoder  # lazily initialised when first needed
+        self._encoder_unavailable: bool = False  # set True on permanent load failure
 
         self.entries: List[Dict[str, Any]] = []
         self._q_embeddings: Optional[np.ndarray] = None  # shape [N, D]
@@ -63,11 +65,29 @@ class VectorKnowledgeBase:
 
     def _get_encoder(self):
         """Return (and lazily initialise) the sentence-transformer encoder."""
-        if self._encoder is None and not getattr(self, '_encoder_unavailable', False):
+        if self._encoder is None and not self._encoder_unavailable:
             try:
-                from sentence_transformers import SentenceTransformer  # type: ignore
+                # The project root contains a local ``datasets/`` package that
+                # shares its name with the HuggingFace ``datasets`` library.
+                # When the project root is on ``sys.path`` Python resolves
+                # ``import datasets`` to the local package, which does not
+                # export ``Dataset``.  ``sentence_transformers`` (and its
+                # dependencies) import from the HuggingFace package and
+                # therefore fail with
+                #   "cannot import name 'Dataset' from 'datasets'".
+                #
+                # Work-around: temporarily remove the local package from
+                # ``sys.modules`` so that ``sentence_transformers`` finds the
+                # real HuggingFace package.  The local package is always
+                # restored afterwards so the rest of the project keeps working.
+                _stashed = sys.modules.pop("datasets", None)
+                try:
+                    from sentence_transformers import SentenceTransformer  # type: ignore
 
-                self._encoder = SentenceTransformer(self.encoder_name)
+                    self._encoder = SentenceTransformer(self.encoder_name)
+                finally:
+                    if _stashed is not None:
+                        sys.modules["datasets"] = _stashed
             except Exception as exc:
                 logger.warning(
                     "VectorKnowledgeBase: could not load SentenceTransformer '%s': %s. "

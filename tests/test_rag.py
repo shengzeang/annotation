@@ -434,3 +434,121 @@ class TestAPILLMLogprobs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# VectorKnowledgeBase – datasets shadowing fix
+# ---------------------------------------------------------------------------
+
+_SENTINEL = object()  # used to detect "key was absent" in sys.modules
+
+
+class TestGetEncoderDatasetsShadowFix(unittest.TestCase):
+    """Verify that _get_encoder() restores the local ``datasets`` module after
+    importing ``sentence_transformers``.
+
+    The project contains a local ``datasets/`` package.  When ``sys.path``
+    includes the project root, ``import datasets`` resolves to that local
+    package, which does not export ``Dataset``.  ``sentence_transformers`` (and
+    its sub-modules) try to do ``from datasets import Dataset`` at import time
+    and would fail with ``ImportError`` unless we temporarily remove the local
+    module from ``sys.modules`` while importing ``sentence_transformers``.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self.tmp.close()
+        os.unlink(self.tmp.name)
+
+    def tearDown(self):
+        if os.path.exists(self.tmp.name):
+            os.unlink(self.tmp.name)
+
+    def _fresh_kb(self):
+        kb = VectorKnowledgeBase(kb_path=self.tmp.name)
+        kb._encoder = None
+        kb._encoder_unavailable = False
+        return kb
+
+    def test_local_datasets_restored_after_successful_encoder_load(self):
+        """sys.modules['datasets'] must point to the local module after a
+        successful _get_encoder() call."""
+        local_datasets = MagicMock(name="local_datasets_package")
+        kb = self._fresh_kb()
+
+        # Install a fake local datasets module.
+        original = sys.modules.pop("datasets", _SENTINEL)
+        sys.modules["datasets"] = local_datasets
+        try:
+            # Patch sentence_transformers so the import succeeds without a GPU
+            # or a downloaded model.
+            fake_encoder = MagicMock()
+            fake_encoder.encode.return_value = np.zeros((1, 4), dtype=np.float32)
+            fake_st = MagicMock()
+            fake_st.SentenceTransformer.return_value = fake_encoder
+            with patch.dict(sys.modules, {"sentence_transformers": fake_st}):
+                result = kb._get_encoder()
+
+            # The local datasets module must be restored.
+            self.assertIs(
+                sys.modules.get("datasets"),
+                local_datasets,
+                "local 'datasets' module must be restored in sys.modules after _get_encoder()",
+            )
+            # The encoder must have been created.
+            self.assertIsNotNone(result)
+        finally:
+            if original is not _SENTINEL:
+                sys.modules["datasets"] = original
+            else:
+                sys.modules.pop("datasets", None)
+
+    def test_local_datasets_restored_even_on_encoder_failure(self):
+        """sys.modules['datasets'] must point to the local module even when
+        SentenceTransformer raises an exception."""
+        local_datasets = MagicMock(name="local_datasets_package")
+        kb = self._fresh_kb()
+
+        original = sys.modules.pop("datasets", _SENTINEL)
+        sys.modules["datasets"] = local_datasets
+        try:
+            fake_st = MagicMock()
+            fake_st.SentenceTransformer.side_effect = RuntimeError("model load failed")
+            with patch.dict(sys.modules, {"sentence_transformers": fake_st}):
+                result = kb._get_encoder()
+
+            # datasets is restored despite the failure.
+            self.assertIs(sys.modules.get("datasets"), local_datasets)
+            # Encoder is unavailable; result is None.
+            self.assertIsNone(result)
+            self.assertTrue(kb._encoder_unavailable)
+        finally:
+            if original is not _SENTINEL:
+                sys.modules["datasets"] = original
+            else:
+                sys.modules.pop("datasets", None)
+
+    def test_datasets_not_spuriously_added_when_absent(self):
+        """When 'datasets' was not in sys.modules before the call and the
+        encoder load fails, 'datasets' must not be left in sys.modules."""
+        kb = self._fresh_kb()
+
+        original = sys.modules.pop("datasets", _SENTINEL)
+        try:
+            fake_st = MagicMock()
+            fake_st.SentenceTransformer.side_effect = RuntimeError("no model")
+            with patch.dict(sys.modules, {"sentence_transformers": fake_st}):
+                kb._get_encoder()
+
+            self.assertNotIn(
+                "datasets",
+                sys.modules,
+                "'datasets' must not appear in sys.modules when it was absent before the call",
+            )
+        finally:
+            if original is not _SENTINEL:
+                sys.modules["datasets"] = original
+
+
+if __name__ == "__main__":
+    unittest.main()
