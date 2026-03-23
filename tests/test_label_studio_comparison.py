@@ -784,3 +784,71 @@ class TestLLMDispatch(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Progress banner tests — verify condition banners are printed to stdout
+# ---------------------------------------------------------------------------
+
+class TestConditionProgressBanners(unittest.TestCase):
+    """Verify that run_experiment() prints a [i/N] banner for each condition."""
+
+    def setUp(self):
+        self.dataset = _make_dataset(n=10)
+        self.task = _MockTask()
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _captured_output(self) -> str:
+        import io, contextlib
+        llm = _MockLLM()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            run_experiment(
+                dataset=self.dataset,
+                oracle_llm=llm,
+                dataflow_llm=llm,
+                output_dir=self.tmp_dir,
+                skip_finetune=True,
+                oracle_task=self.task,
+                dataflow_task=self.task,
+            )
+        return buf.getvalue()
+
+    def test_all_five_condition_banners_printed(self):
+        out = self._captured_output()
+        for name in (
+            "Single Oracle",
+            "3-Oracle Majority Vote",
+            "DataFlow (naive LLM)",
+            "DataFlow (KB + RAG)",
+            "DataFlow (full pipeline)",
+        ):
+            self.assertIn(name, out, f"Banner for '{name}' not found in stdout")
+
+    def test_banner_format_first_and_last(self):
+        out = self._captured_output()
+        self.assertIn("[1/5]", out)
+        self.assertIn("[5/5]", out)
+
+    def test_banners_appear_in_order(self):
+        out = self._captured_output()
+        positions = [
+            out.index(name)
+            for name in (
+                "Single Oracle",
+                "3-Oracle Majority Vote",
+                "DataFlow (naive LLM)",
+                "DataFlow (KB + RAG)",
+                "DataFlow (full pipeline)",
+            )
+        ]
+        self.assertEqual(positions, sorted(positions),
+                         "Condition banners must appear in order 1-5")
+
+
+if __name__ == "__main__":
+    unittest.main()

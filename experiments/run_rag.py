@@ -272,7 +272,9 @@ def run_experiment(
     ]
 
     results = []
-    for cond_name, use_rag in conditions:
+    n_cond = len(conditions)
+    for i, (cond_name, use_rag) in enumerate(conditions, 1):
+        print(f"\n[{i}/{n_cond}] Running condition: {cond_name} …")
         kb_path = os.path.join(output_dir, f"kb_{re.sub(r'[^a-z0-9]', '_', cond_name.lower())}.json")
         annotator = Annotator(
             candidate_llms,

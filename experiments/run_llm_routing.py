@@ -289,11 +289,21 @@ def run_experiment(
         routed = router.route(filtered)
         return annotator.annotate_batch(routed)
 
+    _N = 4
+    print(f"\n[1/{_N}] Running condition: All-cheap …")
+    _data_cheap = _annotate_no_router("cheap")
+    print(f"\n[2/{_N}] Running condition: All-expensive …")
+    _data_expensive = _annotate_no_router("expensive")
+    print(f"\n[3/{_N}] Running condition: CascadeRouter …")
+    _data_cascade = _annotate_cascade()
+    print(f"\n[4/{_N}] Running condition: LLMRouter …")
+    _data_llm_router = _annotate_llm_router()
+
     conditions_data = [
-        ("All-cheap",    _annotate_no_router("cheap")),
-        ("All-expensive", _annotate_no_router("expensive")),
-        ("CascadeRouter", _annotate_cascade()),
-        ("LLMRouter",     _annotate_llm_router()),
+        ("All-cheap",     _data_cheap),
+        ("All-expensive", _data_expensive),
+        ("CascadeRouter", _data_cascade),
+        ("LLMRouter",     _data_llm_router),
     ]
 
     results = []

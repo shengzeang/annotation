@@ -239,3 +239,48 @@ class TestPrintResultsTable(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Progress banner tests — verify condition banners are printed to stdout
+# ---------------------------------------------------------------------------
+
+class TestConditionProgressBanners(unittest.TestCase):
+    """Verify that run_experiment() prints a [i/N] banner for each condition."""
+
+    def setUp(self):
+        self.dataset = _make_dataset(n=10)
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _captured_output(self) -> str:
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            run_experiment(
+                dataset=self.dataset,
+                cheap_llm=MockAnnotationLLM(),
+                expensive_llm=MockAnnotationLLM(),
+                judge_llm=MockJudgeLLM(),
+                scorer_llm=MockScorerLLM(),
+                output_dir=self.tmp_dir,
+                force_fallback=True,
+            )
+        return buf.getvalue()
+
+    def test_all_four_banners_printed(self):
+        out = self._captured_output()
+        for name in ("All-cheap", "All-expensive", "CascadeRouter", "LLMRouter"):
+            self.assertIn(name, out, f"Banner for '{name}' not found in stdout")
+
+    def test_banner_format_contains_fraction(self):
+        out = self._captured_output()
+        self.assertIn("[1/4]", out)
+        self.assertIn("[4/4]", out)
+
+
+if __name__ == "__main__":
+    unittest.main()

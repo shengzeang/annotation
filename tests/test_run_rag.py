@@ -261,3 +261,48 @@ class TestPrintResultsTable(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Progress banner tests — verify condition banners are printed to stdout
+# ---------------------------------------------------------------------------
+
+class TestConditionProgressBanners(unittest.TestCase):
+    """Verify that run_experiment() prints a [i/N] banner for each condition."""
+
+    def setUp(self):
+        self.dataset = _make_dataset(n=10)
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _captured_output(self) -> str:
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            run_experiment(
+                dataset=self.dataset,
+                llm=MockLLM(),
+                judge_llm=MockJudgeLLM(),
+                output_dir=self.tmp_dir,
+                topk=3,
+                window=5,
+                force_fallback=True,
+            )
+        return buf.getvalue()
+
+    def test_all_two_banners_printed(self):
+        out = self._captured_output()
+        for name in ("No RAG", "RAG"):
+            self.assertIn(name, out, f"Banner for '{name}' not found in stdout")
+
+    def test_banner_format_contains_fraction(self):
+        out = self._captured_output()
+        self.assertIn("[1/2]", out)
+        self.assertIn("[2/2]", out)
+
+
+if __name__ == "__main__":
+    unittest.main()

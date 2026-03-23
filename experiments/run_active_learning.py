@@ -278,7 +278,9 @@ def run_experiment(
     ]
 
     results: List[Dict[str, Any]] = []
-    for cond_name, selected in conditions:
+    n_cond = len(conditions)
+    for i, (cond_name, selected) in enumerate(conditions, 1):
+        print(f"\n[{i}/{n_cond}] Running condition: {cond_name}  ({len(selected)} samples) …")
         # Build fresh annotator per condition (fresh KB to avoid cross-contamination)
         kb_path = os.path.join(output_dir, f"kb_{re.sub(r'[^a-z0-9]', '_', cond_name.lower())}.json")
         annotator = Annotator(

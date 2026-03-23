@@ -44,6 +44,8 @@ import tempfile
 from collections import Counter
 from typing import Any, Dict, List, Optional
 
+from tqdm import tqdm
+
 # ---------------------------------------------------------------------------
 # Allow running as a top-level script or via `python -m experiments...`
 # ---------------------------------------------------------------------------
@@ -154,7 +156,7 @@ class OracleAnnotator:
     ) -> List[Dict[str, Any]]:
         """Annotate every sample in *dataset* and return augmented records."""
         results = []
-        for sample in dataset:
+        for sample in tqdm(dataset, desc=f"Oracle ×{self.num_oracles}", unit="sample", leave=False):
             annotation = self.annotate(sample)
             results.append({**sample, "annotation": annotation})
         return results
@@ -204,7 +206,8 @@ def run_dataflow_condition(
     kb: List[Dict[str, Any]] = []  # simple in-memory KB for RAG retrieval
 
     results: List[Dict[str, Any]] = []
-    for sample in dataset:
+    rag_label = "on" if rag else "off"
+    for sample in tqdm(dataset, desc=f"DataFlow [rag={rag_label}, thr={confidence_threshold:.2f}]", unit="sample", leave=False):
         # RAG: retrieve similar examples from the in-memory KB
         rag_examples: List[Dict[str, Any]] = []
         if rag and kb:
@@ -470,29 +473,35 @@ def run_experiment(
 
     # Build conditions: (name, annotated_records)
     conditions: List[tuple] = []
+    _N = 5  # total number of conditions
 
     # -- Oracle conditions (single / 3-oracle majority vote) --
+    print(f"\n[1/{_N}] Running condition: Single Oracle …")
     single_oracle = OracleAnnotator(oracle_llm, num_oracles=1, task=oracle_task)
     conditions.append(
         ("Single Oracle", single_oracle.annotate_dataset(dataset))
     )
 
+    print(f"\n[2/{_N}] Running condition: 3-Oracle Majority Vote …")
     three_oracle = OracleAnnotator(oracle_llm, num_oracles=3, task=oracle_task)
     conditions.append(
         ("3-Oracle Majority Vote", three_oracle.annotate_dataset(dataset))
     )
 
     # -- DataFlow conditions --
+    print(f"\n[3/{_N}] Running condition: DataFlow (naive LLM) …")
     conditions.append((
         "DataFlow (naive LLM)",
         run_dataflow_condition(dataset, dataflow_llm, rag=False,
                                confidence_threshold=0.65, task=dataflow_task),
     ))
+    print(f"\n[4/{_N}] Running condition: DataFlow (KB + RAG) …")
     conditions.append((
         "DataFlow (KB + RAG)",
         run_dataflow_condition(dataset, dataflow_llm, rag=True,
                                confidence_threshold=0.65, task=dataflow_task),
     ))
+    print(f"\n[5/{_N}] Running condition: DataFlow (full pipeline) …")
     conditions.append((
         "DataFlow (full pipeline)",
         run_dataflow_condition(dataset, dataflow_llm, rag=True,
