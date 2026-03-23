@@ -84,8 +84,11 @@ def evaluate(model_path, data_path):
         rouge_dict = compute_rouge(label, pred)
         rouge_l = rouge_dict.get("rouge-l", {}).get("f", 0.0)
         rouge_l_scores.append(rouge_l)
-    print(f"{model_path} BLEU: {sum(bleu_scores)/len(bleu_scores):.4f}")
-    print(f"{model_path} ROUGE-L: {sum(rouge_l_scores)/len(rouge_l_scores):.4f}")
+    avg_bleu = sum(bleu_scores) / len(bleu_scores) if bleu_scores else 0.0
+    avg_rouge_l = sum(rouge_l_scores) / len(rouge_l_scores) if rouge_l_scores else 0.0
+    print(f"{model_path} BLEU: {avg_bleu:.4f}")
+    print(f"{model_path} ROUGE-L: {avg_rouge_l:.4f}")
+    return {"bleu": round(avg_bleu, 4), "rouge_l": round(avg_rouge_l, 4)}
 
 
 if __name__ == "__main__":

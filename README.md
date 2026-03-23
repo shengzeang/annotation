@@ -77,52 +77,56 @@ The frontend of DataFlow-Annotator is built using **React-Flow** for the user in
 - **`tasks/`**: Task definitions and parsing logic (QA, classification, NER, summarization, translation).
 - **`datasets/`**: Lightweight dataset adapters and converters (SQuAD helpers, generic QA parsers).
 - **`misc/`**: Helper scripts, evaluation tools, and providers (e.g., `evaluate.py`, `llm_provider.py`).
-- **`experiments/`**: Self-contained experiment scripts (no GPU required) that compare annotation conditions and estimate downstream fine-tuning performance.
+- **`experiments/`**: Experiment scripts comparing annotation conditions with real Qwen LLMs and optional downstream fine-tuning.
 
 ---
 
 ## 🧪 Experiments
 
-### Label Studio vs DataFlow-Annotator — QA Annotation Comparison
+### Oracle vs DataFlow-Annotator — QA Annotation Comparison (Qwen LLMs)
 
 `experiments/run_label_studio_comparison.py` benchmarks DataFlow-Annotator
-against Label Studio–style human annotation using **QA fine-tuning as the
-downstream evaluation task**.  It is fully self-contained (no GPU, no network
-access required) and uses a Natarajan noise-degradation model to estimate the
-performance of a small LLM fine-tuned on each annotated dataset.
+against oracle LLM annotation using **Qwen fine-tuning as the downstream
+evaluation task**.  All annotation is performed by real Qwen models (via
+`misc/llm_provider.LocalLLM` or compatible API).  Downstream fine-tuning
+delegates to `misc/evaluate.py`'s `finetune_sft()` and `evaluate()`
+(requires GPU); omit `--skip-finetune` to run the full pipeline.
 
 **Five conditions are compared:**
 
 | Condition | Description |
 |---|---|
-| Label Studio (3 annotators) | Majority vote across 3 human annotators (85 % per-annotator accuracy) |
-| Label Studio (1 annotator) | Single human annotator (75 % accuracy) |
-| DataFlow (naive LLM) | Baseline LLM annotation without KB/RAG |
-| DataFlow (KB + RAG) | LLM annotation with knowledge-base retrieval augmentation |
-| DataFlow (full pipeline) | KB + RAG + periodic outlier purge |
+| Single Oracle | One call to a large Qwen model (e.g. Qwen2.5-72B) per sample |
+| 3-Oracle Majority Vote | Three independent Qwen calls; majority vote decides the annotation |
+| DataFlow (naive LLM) | Qwen-7B annotation without KB/RAG |
+| DataFlow (KB + RAG) | Qwen-7B with in-context KB retrieval augmentation |
+| DataFlow (full pipeline) | Qwen-7B with KB + RAG + stricter confidence threshold |
 
 **Metrics reported:**
 
 - `Ann-F1` / `Ann-EM` — mean token-level F1 and exact-match of annotations vs ground truth
-- `DS-EM` / `DS-F1` — estimated downstream exact-match / F1 of a small LLM fine-tuned on the annotated data
+- `DS-BLEU` / `DS-ROUGE-L` — downstream BLEU and ROUGE-L of a Qwen model fine-tuned on the annotated data (requires `--val-path` and GPU)
 
 **Usage:**
 
 ```bash
-# Synthetic data (no SQuAD file needed)
-python experiments/run_label_studio_comparison.py --samples 500
+# Annotation only (no GPU required)
+python experiments/run_label_studio_comparison.py --samples 500 --skip-finetune
 
-# With a local SQuAD v1.1 JSON file
+# Full pipeline: annotation + Qwen fine-tuning + evaluation (requires GPU)
 python experiments/run_label_studio_comparison.py \
     --samples 500 \
     --squad-path path/to/train-v1.1.json \
+    --oracle-model  Qwen/Qwen2.5-72B-Instruct \
+    --dataflow-model Qwen/Qwen2.5-7B-Instruct \
+    --finetune-model Qwen/Qwen2.5-7B-Instruct \
+    --val-path validation.json \
     --output-dir /tmp/sft_out \
     --seed 42
 ```
 
-The script writes one SFT JSONL file per condition (suitable for
-instruction-tuning small models such as T5-small or Phi-2) and a
-`comparison_summary.json` to `--output-dir`.
+The script writes one SFT JSONL file per condition (ready for Qwen fine-tuning
+via `misc/evaluate.py`) and a `comparison_summary.json` to `--output-dir`.
 
 ---
 
