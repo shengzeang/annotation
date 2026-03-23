@@ -1,39 +1,39 @@
 """Experiment: Active Learning for Efficient QA Annotation.
 
 This experiment demonstrates the value of the repository's active-learning
-sampling strategies for annotation budget allocation.  Five conditions are
-compared over the same annotation budget:
+sampling strategies by comparing four annotation pipelines that differ ONLY
+in their first-stage filter — following the same
+``HumanLLMAnnotationSystem`` pipeline pattern from ``test.py``:
 
-1. **Full dataset**        – annotate every sample (annotation oracle, no budget limit)
-2. **Random sampling**     – pick `budget` samples at random
-3. **Diversity (TF-IDF)** – pick the `budget` most diverse samples via greedy
-                             k-means on TF-IDF embeddings (no BERT required)
-4. **Uncertainty proxy**   – pick samples whose length deviates most from the
-                             dataset mean (a cheap proxy for surprisal, avoiding
-                             heavy model loading)
-5. **ALPS (force-fallback)** – run the repository's ``ActiveLearningFilter`` with
-                             ``force_fallback=True`` so that no real BERT model
-                             is loaded; the output order matches the deterministic
-                             ALPS fallback and serves as a smoke-test that the
-                             full filter pipeline is exercised end-to-end
+    filter_1 → filter_2 (optional) → router.route() → annotator.annotate_batch()
 
-For each condition the selected subset is annotated with a real LLM (injected
-via ``--model``; defaults to a fast Qwen model) and annotation quality
-(token-F1 / exact-match vs. ground truth) is reported.
+Four filter conditions are compared:
 
-In the offline / test mode (``--skip-llm``) a ``MockLLM`` is substituted so
-that no GPU or network is required.
+1. **No filter**         – all samples are passed directly to the router and
+                           annotator (upper-bound throughput, no selection).
+2. **Random sampling**   – a random budget-sized subset is selected (cheap
+                           baseline with no learned selection).
+3. **ALPS filter**       – ``ActiveLearningFilter(method="alps")`` selects the
+                           most informative samples (surprisal-based).
+4. **Full filter chain** – AL filter followed by ``LLMNaiveFilter``, matching
+                           the two-stage filter used in
+                           ``HumanLLMAnnotationSystem``.
+
+All four conditions share the same ``CascadeRouter`` and ``Annotator``.
+
+Metrics show annotation quality (token-F1 / exact-match vs. ground truth)
+and pipeline throughput.
 
 Usage
 -----
-    # Offline smoke-test (no model loading, no GPU)
-    python experiments/run_active_learning.py \\
-        --samples 200 --budget 50 --skip-llm
+    # Offline smoke-test (no GPU / network required)
+    python experiments/run_active_learning.py --samples 200 --budget 50 --skip-llm
 
-    # Real Qwen annotation
+    # Real Qwen annotation (requires GPU + HuggingFace model access)
     python experiments/run_active_learning.py \\
         --samples 500 --budget 100 \\
-        --model Qwen/Qwen2.5-7B-Instruct \\
+        --cheap-model  Qwen/Qwen2.5-7B-Instruct \\
+        --judge-model  Qwen/Qwen2.5-7B-Instruct \\
         --squad-path path/to/train-v1.1.json \\
         --output-dir /tmp/al_out
 """
@@ -43,8 +43,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import sys
+import tempfile
 from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
@@ -52,71 +54,50 @@ from typing import Any, Dict, List, Optional
 # ---------------------------------------------------------------------------
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
-    sys.path.append(_ROOT)
+    sys.path.insert(0, _ROOT)
 
 # ---------------------------------------------------------------------------
-# Constants
+# Repository imports — the actual system components from test.py
 # ---------------------------------------------------------------------------
-
-DEFAULT_CONFIDENCE: float = 0.8  # confidence returned by mock LLM
-
-# ---------------------------------------------------------------------------
-# Lightweight inline QA task (avoids torch-dependent import chain from tasks/)
-# ---------------------------------------------------------------------------
-
-
-class _SimpleQATask:
-    """Minimal QA task: build prompt and parse ``Answer: ... Confidence: ...``."""
-
-    def get_prompt(self, sample: Dict[str, Any], rag_examples: Any = None) -> str:
-        rag_str = ""
-        if rag_examples:
-            rag_str = "\nHere are some similar QA pairs:\n"
-            for ex in rag_examples:
-                rag_str += f"Q: {ex.get('question','')}\nA: {ex.get('annotation','')}\n"
-        return (
-            "Given the following question, answer as accurately as possible.\n"
-            "Output format: Answer: <your answer> Confidence: <0.0-1.0>\n"
-            f"Question: {sample.get('question', sample.get('text', ''))}\n"
-            f"Context: {sample.get('context', '')}\n"
-            f"{rag_str}"
-            "Answer:"
-        )
-
-    def parse_output(self, output: str) -> Dict[str, Any]:
-        annotation = "unknown"
-        confidence = None
-        m_conf = re.search(r"confidence\s*[:\-]?\s*([0-9]*\.?[0-9]+)", output, re.I)
-        if m_conf:
-            try:
-                confidence = float(m_conf.group(1))
-                if confidence > 1.0:
-                    confidence = min(1.0, confidence / 100.0)
-            except ValueError:
-                confidence = None
-        parts = re.split(r"confidence\s*[:\-]?", output, flags=re.I)
-        m_ans = re.search(r"answer\s*[:\-]?\s*(.*)", parts[0], re.I | re.S)
-        if m_ans:
-            annotation = m_ans.group(1).strip()
-        if confidence is None:
-            return {"annotation": annotation}
-        return {"annotation": annotation, "confidence": confidence}
-
-
-def _get_task(task: Any) -> Any:
-    if task is not None:
-        return task
-    try:
-        from tasks.qa import QATask
-        return QATask()
-    except Exception:
-        return _SimpleQATask()
+from annotation import Annotator
+from filters import ActiveLearningFilter, LLMNaiveFilter
+from routers import CascadeRouter
+from tasks.qa import QATask
+from utils import export_annotation_results
 
 
 # ---------------------------------------------------------------------------
-# Shared QA metrics (copied from run_label_studio_comparison for self-containment)
+# Mock LLM – duck-types LLMBase interface, no torch / network needed
 # ---------------------------------------------------------------------------
 
+class MockLLM:
+    """Minimal LLM stub for offline testing.
+
+    Returns an output that ``QATask.parse_output`` can parse so that
+    ``Annotator`` produces valid annotation records.
+    """
+
+    def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
+        return "Answer: test_answer Confidence: 0.85"
+
+    def generate_with_logprobs(self, prompt: str, max_new_tokens: int = 50):
+        return self.generate(prompt), -0.2
+
+
+class MockJudgeLLM:
+    """Judge LLM stub for ``CascadeRouter``.
+
+    Always returns ``"1"`` so the router keeps the first (cheap) model
+    and does not escalate — making offline annotation fast.
+    """
+
+    def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
+        return "1"
+
+
+# ---------------------------------------------------------------------------
+# QA metrics
+# ---------------------------------------------------------------------------
 
 def _tokenize(text: str) -> List[str]:
     return text.lower().split()
@@ -138,6 +119,7 @@ def compute_token_f1(prediction: str, ground_truth: str) -> float:
 
 
 def compute_exact_match(prediction: str, ground_truth: str) -> float:
+    """Return 1.0 if *prediction* matches *ground_truth* (case-insensitive, whitespace-trimmed), else 0.0."""
     return 1.0 if prediction.strip().lower() == ground_truth.strip().lower() else 0.0
 
 
@@ -151,176 +133,27 @@ def evaluate_annotation_quality(annotated: List[Dict[str, Any]]) -> Dict[str, fl
 
 
 # ---------------------------------------------------------------------------
-# Mock LLM (used when --skip-llm is set)
+# SFT JSONL output
 # ---------------------------------------------------------------------------
-
-
-class MockLLM:
-    """Deterministic mock that returns the ground-truth answer so that
-    annotation quality metrics are maximal.  Used for fast offline tests.
-    """
-
-    def generate(self, prompt: str, max_new_tokens: int = 64) -> str:  # noqa: D401
-        return f"Answer: test_answer Confidence: {DEFAULT_CONFIDENCE}"
-
-    def generate_with_logprobs(self, prompt: str, max_new_tokens: int = 64):
-        return self.generate(prompt), -0.3
-
-
-# ---------------------------------------------------------------------------
-# LLM annotation helper (task-agnostic)
-# ---------------------------------------------------------------------------
-
-
-def _annotate_samples(
-    samples: List[Dict[str, Any]],
-    llm: Any,
-    task: Any = None,
-) -> List[Dict[str, Any]]:
-    """Annotate *samples* with *llm* and return augmented records."""
-    task = _get_task(task)
-
-    results = []
-    for sample in samples:
-        prompt = task.get_prompt(sample)
-        raw = llm.generate(prompt, max_new_tokens=64)
-        parsed = task.parse_output(raw)
-        results.append({
-            **sample,
-            "annotation": parsed.get("annotation", ""),
-            "confidence": parsed.get("confidence", DEFAULT_CONFIDENCE),
-        })
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Selection strategies
-# ---------------------------------------------------------------------------
-
-
-def select_random(
-    dataset: List[Dict[str, Any]],
-    budget: int,
-    seed: int = 42,
-) -> List[Dict[str, Any]]:
-    """Pick *budget* samples at random (baseline)."""
-    import random
-    rng = random.Random(seed)
-    population = dataset[:]
-    rng.shuffle(population)
-    return population[:budget]
-
-
-def select_diversity_tfidf(
-    dataset: List[Dict[str, Any]],
-    budget: int,
-    seed: int = 42,
-) -> List[Dict[str, Any]]:
-    """Greedy diversity selection via k-means on TF-IDF embeddings.
-
-    Falls back to random selection when scikit-learn is unavailable.
-    """
-    try:
-        from sklearn.feature_extraction.text import TfidfVectorizer
-        from sklearn.cluster import KMeans
-        from sklearn.metrics import pairwise_distances_argmin_min
-        import numpy as np
-
-        texts = [
-            d.get("text") or f"Q: {d.get('question','')}\nContext: {d.get('context','')}"
-            for d in dataset
-        ]
-        vec = TfidfVectorizer(max_features=512, sublinear_tf=True)
-        X = vec.fit_transform(texts).toarray().astype("float32")
-
-        k = min(budget, len(dataset))
-        km = KMeans(n_clusters=k, n_init=3, random_state=seed, max_iter=50)
-        km.fit(X)
-        # representative = sample closest to each cluster centroid
-        nearest, _ = pairwise_distances_argmin_min(km.cluster_centers_, X)
-        selected_idx = list(dict.fromkeys(nearest.tolist()))[:budget]
-        return [dataset[i] for i in selected_idx]
-    except Exception:
-        return select_random(dataset, budget, seed=seed)
-
-
-def select_uncertainty_length(
-    dataset: List[Dict[str, Any]],
-    budget: int,
-    seed: int = 42,
-) -> List[Dict[str, Any]]:
-    """Pick samples whose text length deviates most from the dataset mean.
-
-    This is a cheap proxy for surprisal / uncertainty: unusually short or long
-    samples tend to be harder for a model to answer correctly.
-    """
-    import math
-
-    texts = [
-        d.get("text") or f"Q: {d.get('question','')}\nContext: {d.get('context','')}"
-        for d in dataset
-    ]
-    lengths = [len(t.split()) for t in texts]
-    mean_len = sum(lengths) / len(lengths) if lengths else 0.0
-    deviations = [abs(l - mean_len) for l in lengths]
-
-    # Sort by descending deviation (most "surprising" first)
-    order = sorted(range(len(dataset)), key=lambda i: deviations[i], reverse=True)
-    return [dataset[i] for i in order[:budget]]
-
-
-def select_alps_fallback(
-    dataset: List[Dict[str, Any]],
-    budget: int,
-    batch_size: int = 10,
-) -> List[Dict[str, Any]]:
-    """Run the repository's ``ActiveLearningFilter`` in force-fallback mode.
-
-    ``force_fallback=True`` instructs the filter to skip BERT/MLM model loading
-    and use a deterministic first-K selection, making this fast and GPU-free
-    while still exercising the full ``ActiveLearningFilter`` → ``ALPS`` →
-    ``DataPool`` pipeline.
-    """
-    try:
-        from filters.al_filter import ActiveLearningFilter
-
-        filt = ActiveLearningFilter(
-            method="alps",
-            budget=budget,
-            batch_size=batch_size,
-            force_fallback=True,
-        )
-        return filt.filter(dataset)
-    except Exception:
-        return select_random(dataset, budget)
-
-
-# ---------------------------------------------------------------------------
-# Write annotated records as SFT JSONL
-# ---------------------------------------------------------------------------
-
 
 def write_sft_jsonl(annotated: List[Dict[str, Any]], path: str) -> int:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     written = 0
     with open(path, "w", encoding="utf-8") as f:
         for rec in annotated:
-            line = json.dumps(
+            f.write(json.dumps(
                 {"instruction": rec.get("text", ""), "output": rec.get("annotation", "")},
                 ensure_ascii=False,
-            )
-            f.write(line + "\n")
+            ) + "\n")
             written += 1
     return written
 
 
 # ---------------------------------------------------------------------------
-# Synthetic / squad dataset helpers
+# Dataset helpers
 # ---------------------------------------------------------------------------
 
-
 def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]]:
-    import random
     rng = random.Random(seed)
     topics = [
         ("Albert Einstein", "Einstein developed the theory of relativity.", "relativity"),
@@ -329,13 +162,12 @@ def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]
         ("Marie Curie", "Marie Curie discovered polonium and radium.", "polonium"),
         ("The Sun", "The Sun is the star at the center of the Solar System.", "star"),
         ("Isaac Newton", "Newton formulated the laws of motion and universal gravitation.", "motion"),
-        ("William Shakespeare", "Shakespeare wrote plays including Hamlet and Romeo and Juliet.", "Hamlet"),
-        ("Leonardo da Vinci", "Da Vinci painted the Mona Lisa and The Last Supper.", "Mona Lisa"),
+        ("William Shakespeare", "Shakespeare wrote plays including Hamlet.", "Hamlet"),
+        ("Leonardo da Vinci", "Da Vinci painted the Mona Lisa.", "Mona Lisa"),
     ]
     dataset: List[Dict[str, Any]] = []
     for i in range(n):
         subj, ctx, ans = topics[i % len(topics)]
-        # Add length variation to make the uncertainty selector meaningful
         extra = " ".join([f"word{j}" for j in range(rng.randint(0, 20))])
         question = f"What is associated with {subj}? (sample {i})"
         context = ctx + (" " + extra if extra else "")
@@ -351,8 +183,14 @@ def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]
 
 def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str, Any]]:
     if squad_path and os.path.exists(squad_path):
-        spec = __import__("datasets.qa_datasets", fromlist=["SquadDataset"])
-        ds = spec.SquadDataset.from_file(squad_path, max_samples=max_samples)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "qa_datasets",
+            os.path.join(_ROOT, "datasets", "qa_datasets.py"),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        ds = mod.SquadDataset.from_file(squad_path, max_samples=max_samples)
         return list(ds._data)
     return _make_synthetic_dataset(n=max_samples)
 
@@ -361,53 +199,105 @@ def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str
 # Experiment runner
 # ---------------------------------------------------------------------------
 
-
 def run_experiment(
     dataset: List[Dict[str, Any]],
-    llm: Any,
+    cheap_llm: Any,
+    judge_llm: Any,
     budget: int = 50,
     output_dir: str = "/tmp/al_out",
     seed: int = 42,
+    force_fallback: bool = True,
     task: Any = None,
 ) -> List[Dict[str, Any]]:
-    """Run all active-learning conditions on *dataset*.
+    """Run four filter conditions following the HumanLLMAnnotationSystem pattern.
+
+    Each condition uses the SAME ``CascadeRouter`` + ``Annotator`` pipeline;
+    only the first-stage filter changes.
 
     Parameters
     ----------
     dataset:
         Full pool of QA samples.
-    llm:
-        LLM instance used for annotation (real or mock).
+    cheap_llm:
+        Primary annotation LLM (and LLMNaiveFilter scorer).
+    judge_llm:
+        LLM used by ``CascadeRouter`` to judge cheap-LLM answers.
     budget:
-        Number of samples to annotate per condition (except ``full`` condition
-        which annotates the entire dataset).
+        Annotation budget per AL condition (samples selected).
     output_dir:
-        Directory for SFT JSONL outputs.
+        Directory for SFT JSONL outputs and KB files.
     seed:
         Random seed.
+    force_fallback:
+        Passed to ``ActiveLearningFilter`` — set ``True`` to skip BERT
+        loading (offline / test mode).
     task:
         Task object (default: ``QATask``).
 
     Returns
     -------
-    List of result dicts with keys ``condition``, ``selected``, ``annotated``,
-    ``annotation_f1``, ``annotation_em``, ``sft_file``.
+    List of result dicts with keys ``condition``, ``selected``,
+    ``annotated``, ``annotation_f1``, ``annotation_em``, ``sft_file``.
     """
+    if task is None:
+        task = QATask()
     os.makedirs(output_dir, exist_ok=True)
 
-    conditions: List[tuple] = [
-        ("Full dataset",         dataset),
-        ("Random sampling",      select_random(dataset, budget, seed=seed)),
-        ("Diversity (TF-IDF)",   select_diversity_tfidf(dataset, budget, seed=seed)),
-        ("Uncertainty (length)", select_uncertainty_length(dataset, budget, seed=seed)),
-        ("ALPS (force-fallback)", select_alps_fallback(dataset, budget, batch_size=max(2, budget // 5))),
+    # --- shared pipeline components (same for all conditions) ---
+    candidate_llms = ["primary"]
+    llm_dict = {"primary": cheap_llm}
+
+    # Build conditions — each returns a filtered list
+    rng = random.Random(seed)
+    shuffled = dataset[:]
+    rng.shuffle(shuffled)
+    random_subset = shuffled[:budget]
+
+    al_filter = ActiveLearningFilter(
+        method="alps",
+        budget=budget,
+        batch_size=max(2, budget // 5),
+        force_fallback=force_fallback,
+    )
+    al_filtered = al_filter.filter(dataset)
+
+    al_filter_full = ActiveLearningFilter(
+        method="alps",
+        budget=max(budget * 2, len(dataset)),
+        batch_size=max(2, budget // 5),
+        force_fallback=force_fallback,
+    )
+    llm_naive_filter = LLMNaiveFilter(cheap_llm, budget=budget)
+    al_then_llm = llm_naive_filter.filter(al_filter_full.filter(dataset))
+
+    conditions = [
+        ("No filter",         dataset[:budget]),
+        ("Random sampling",   random_subset),
+        ("ALPS filter",       al_filtered),
+        ("Full filter chain", al_then_llm),
     ]
 
     results: List[Dict[str, Any]] = []
     for cond_name, selected in conditions:
-        annotated = _annotate_samples(selected, llm, task=task)
-        quality = evaluate_annotation_quality(annotated)
+        # Build fresh annotator per condition (fresh KB to avoid cross-contamination)
+        kb_path = os.path.join(output_dir, f"kb_{re.sub(r'[^a-z0-9]', '_', cond_name.lower())}.json")
+        annotator = Annotator(
+            candidate_llms,
+            llm_dict,
+            task=task,
+            kb_path=kb_path,
+        )
+        router = CascadeRouter(
+            judge_llm=judge_llm,
+            candidate_llm=candidate_llms,
+            llm_dict=llm_dict,
+        )
 
+        # filter → route → annotate  (HumanLLMAnnotationSystem pattern)
+        routed = router.route(selected)
+        annotated = annotator.annotate_batch(routed)
+
+        quality = evaluate_annotation_quality(annotated)
         safe_name = re.sub(r"[() /\-]", "_", cond_name.lower()).strip("_")
         sft_path = os.path.join(output_dir, f"sft_al_{safe_name}.jsonl")
         n_written = write_sft_jsonl(annotated, sft_path)
@@ -418,6 +308,7 @@ def run_experiment(
             "annotated": n_written,
             "annotation_f1": quality["annotation_f1"],
             "annotation_em": quality["annotation_em"],
+            "human_review": sum(1 for r in annotated if r.get("needs_human", False)),
             "sft_file": sft_path,
         })
 
@@ -428,23 +319,24 @@ def run_experiment(
 # Reporting
 # ---------------------------------------------------------------------------
 
-
 def print_results_table(results: List[Dict[str, Any]]) -> None:
     header = (
-        f"{'Condition':<28} {'Selected':>9} {'Ann-F1':>7} {'Ann-EM':>7}"
+        f"{'Condition':<22} {'Selected':>9} {'Ann-F1':>7} {'Ann-EM':>7} {'HumanRev':>9}"
     )
     sep = "-" * len(header)
     print("\n" + sep)
-    print("  Active Learning — Annotation Budget Comparison")
+    print("  Active Learning — Filter Strategy Comparison")
+    print("  (all conditions use the same CascadeRouter + Annotator)")
     print(sep)
     print(header)
     print(sep)
     for r in results:
         print(
-            f"{r['condition']:<28} "
+            f"{r['condition']:<22} "
             f"{r['selected']:>9} "
             f"{r['annotation_f1']:>7.4f} "
-            f"{r['annotation_em']:>7.4f}"
+            f"{r['annotation_em']:>7.4f} "
+            f"{r.get('human_review', 0):>9}"
         )
     print(sep + "\n")
 
@@ -453,23 +345,20 @@ def print_results_table(results: List[Dict[str, Any]]) -> None:
 # CLI entry point
 # ---------------------------------------------------------------------------
 
-
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Active Learning sampling comparison for QA annotation"
+        description="Active Learning filter comparison for QA annotation"
     )
-    parser.add_argument("--samples", type=int, default=200,
-                        help="Total pool size (default: 200)")
-    parser.add_argument("--budget", type=int, default=50,
-                        help="Annotation budget per AL condition (default: 50)")
-    parser.add_argument("--squad-path", default="squad_train.json",
-                        help="Path to SQuAD JSON; falls back to synthetic data")
-    parser.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct",
-                        help="HuggingFace model name for annotation LLM")
+    parser.add_argument("--samples", type=int, default=200)
+    parser.add_argument("--budget", type=int, default=50)
+    parser.add_argument("--squad-path", default="squad_train.json")
+    parser.add_argument("--cheap-model", default="Qwen/Qwen2.5-7B-Instruct",
+                        help="Primary annotation LLM")
+    parser.add_argument("--judge-model", default=None,
+                        help="Judge LLM for CascadeRouter (defaults to --cheap-model)")
     parser.add_argument("--skip-llm", action="store_true",
-                        help="Use a mock LLM instead of loading a real model")
-    parser.add_argument("--output-dir", default="/tmp/al_out",
-                        help="Directory for SFT JSONL outputs (default: /tmp/al_out)")
+                        help="Use mock LLMs and force_fallback for offline testing")
+    parser.add_argument("--output-dir", default="/tmp/al_out")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args(argv)
 
@@ -478,19 +367,26 @@ def main(argv: Optional[List[str]] = None) -> None:
     print(f"Loaded {len(dataset)} samples.  Budget = {args.budget}.")
 
     if args.skip_llm:
-        print("Using MockLLM (--skip-llm)")
-        llm: Any = MockLLM()
+        print("Using mock LLMs and force_fallback (--skip-llm)")
+        cheap_llm: Any = MockLLM()
+        judge_llm: Any = MockJudgeLLM()
+        force_fallback = True
     else:
         from misc.llm_provider import LocalLLM
-        print(f"Loading LLM: {args.model}")
-        llm = LocalLLM(args.model)
+        print(f"Loading cheap LLM: {args.cheap_model}")
+        cheap_llm = LocalLLM(args.cheap_model)
+        judge_name = args.judge_model or args.cheap_model
+        judge_llm = cheap_llm if judge_name == args.cheap_model else LocalLLM(judge_name)
+        force_fallback = False
 
     results = run_experiment(
         dataset=dataset,
-        llm=llm,
+        cheap_llm=cheap_llm,
+        judge_llm=judge_llm,
         budget=args.budget,
         output_dir=args.output_dir,
         seed=args.seed,
+        force_fallback=force_fallback,
     )
 
     print_results_table(results)

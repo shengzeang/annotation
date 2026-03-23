@@ -1,44 +1,37 @@
 """Experiment: LLM Routing for Cost-Quality Tradeoff in QA Annotation.
 
-This experiment demonstrates how the repository's routing strategies can be
-used to balance annotation quality against cost (number of calls to an
-expensive high-capability LLM) across four conditions:
+This experiment demonstrates how the repository's routing strategies balance
+annotation quality against cost, following the same pipeline pattern from
+``test.py`` (``HumanLLMAnnotationSystem``):
 
-1. **All-cheap**   – route every sample to the cheap / fast LLM
-2. **All-expensive** – route every sample to the expensive / capable LLM
-                       (annotation quality upper-bound)
-3. **Cascade**     – try the cheap LLM first; escalate to the expensive LLM
-                     only when the cheap answer looks wrong (``CascadeRouter``)
-4. **LLM scorer**  – a third "judge" LLM scores each sample's suitability for
-                     each candidate and routes accordingly (``LLMRouter``)
+    filter → router.route() → annotator.annotate_batch()
 
-In addition to annotation quality (token-F1 / exact-match), the experiment
-tracks the **expensive-LLM call rate** for each condition — a proxy for cost.
+Four routing conditions are compared using the same ``ActiveLearningFilter``
++ ``Annotator``:
 
-Real LLMs
----------
-When ``--skip-llm`` is *not* set, two real Qwen models must be specified:
-  ``--cheap-model``     (e.g. ``Qwen/Qwen2.5-7B-Instruct``)
-  ``--expensive-model`` (e.g. ``Qwen/Qwen2.5-72B-Instruct``)
-A third model (``--judge-model``) is used by LLMRouter scoring; it defaults
-to the cheap model.
+1. **All-cheap**   – every sample is annotated by the cheap LLM (no routing).
+2. **All-expensive** – every sample is annotated by the expensive LLM (quality
+                       upper-bound).
+3. **CascadeRouter** – the cheap LLM is tried first; the judge LLM evaluates
+                       the answer and escalates to the expensive LLM when the
+                       answer does not meet the quality threshold.
+4. **LLMRouter**     – a scorer LLM rates each candidate and the highest-rated
+                       model is chosen per sample.
 
-Offline / test mode
--------------------
-Pass ``--skip-llm`` to substitute all real models with ``MockLLM`` instances
-that simulate quality differences deterministically without any GPU or network
-access.
+Metrics show annotation quality (token-F1 / exact-match vs. ground truth)
+and the fraction of samples routed to the expensive LLM (cost proxy).
 
 Usage
 -----
-    # Offline smoke-test
+    # Offline smoke-test (no GPU / network required)
     python experiments/run_llm_routing.py --samples 100 --skip-llm
 
-    # Real Qwen routing
+    # Real Qwen routing (requires GPU)
     python experiments/run_llm_routing.py \\
         --samples 500 \\
         --cheap-model   Qwen/Qwen2.5-7B-Instruct \\
         --expensive-model Qwen/Qwen2.5-72B-Instruct \\
+        --judge-model   Qwen/Qwen2.5-7B-Instruct \\
         --squad-path path/to/train-v1.1.json \\
         --output-dir /tmp/routing_out
 """
@@ -48,8 +41,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import sys
+import tempfile
 from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
@@ -57,74 +52,55 @@ from typing import Any, Dict, List, Optional
 # ---------------------------------------------------------------------------
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
-    sys.path.append(_ROOT)
+    sys.path.insert(0, _ROOT)
 
 # ---------------------------------------------------------------------------
-# Constants
+# Repository imports — actual system components
+# ---------------------------------------------------------------------------
+from annotation import Annotator
+from filters import ActiveLearningFilter
+from routers import CascadeRouter, LLMRouter
+from tasks.qa import QATask
+
+
+# ---------------------------------------------------------------------------
+# Mock LLMs for offline testing
 # ---------------------------------------------------------------------------
 
-CHEAP_LLM_ACCURACY: float = 0.65   # simulated accuracy of the cheap LLM
-EXPENSIVE_LLM_ACCURACY: float = 0.90  # simulated accuracy of the expensive LLM
+class MockAnnotationLLM:
+    """Primary annotation LLM stub.  Returns a QATask-parseable string."""
 
-# ---------------------------------------------------------------------------
-# Lightweight inline QA task (avoids torch-dependent import chain from tasks/)
-# ---------------------------------------------------------------------------
+    def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
+        return "Answer: test_answer Confidence: 0.85"
+
+    def generate_with_logprobs(self, prompt: str, max_new_tokens: int = 50):
+        return self.generate(prompt), -0.2
 
 
-class _SimpleQATask:
-    """Minimal QA task: build prompt and parse ``Answer: ... Confidence: ...``.
+class MockJudgeLLM:
+    """Judge LLM stub for ``CascadeRouter``.
 
-    Used when the repository's ``QATask`` import chain is unavailable (e.g. no
-    torch installed).  Produces prompts compatible with Qwen instruction-tuned
-    models.
+    Returns ``"0"`` so the router ALWAYS escalates to the expensive model,
+    ensuring the cascade path is exercised in tests.
     """
 
-    def get_prompt(self, sample: Dict[str, Any], rag_examples: Any = None) -> str:
-        rag_str = ""
-        if rag_examples:
-            rag_str = "\nHere are some similar QA pairs:\n"
-            for ex in rag_examples:
-                rag_str += f"Q: {ex.get('question','')}\nA: {ex.get('annotation','')}\n"
-        return (
-            "Given the following question, answer as accurately as possible.\n"
-            "Output format: Answer: <your answer> Confidence: <0.0-1.0>\n"
-            f"Question: {sample.get('question', sample.get('text', ''))}\n"
-            f"Context: {sample.get('context', '')}\n"
-            f"{rag_str}"
-            "Answer:"
-        )
-
-    def parse_output(self, output: str) -> Dict[str, Any]:
-        annotation = "unknown"
-        confidence = None
-        m_conf = re.search(r"confidence\s*[:\-]?\s*([0-9]*\.?[0-9]+)", output, re.I)
-        if m_conf:
-            try:
-                confidence = float(m_conf.group(1))
-                if confidence > 1.0:
-                    confidence = min(1.0, confidence / 100.0)
-            except ValueError:
-                confidence = None
-        parts = re.split(r"confidence\s*[:\-]?", output, flags=re.I)
-        m_ans = re.search(r"answer\s*[:\-]?\s*(.*)", parts[0], re.I | re.S)
-        if m_ans:
-            annotation = m_ans.group(1).strip()
-        if confidence is None:
-            return {"annotation": annotation}
-        return {"annotation": annotation, "confidence": confidence}
+    def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
+        return "0"
 
 
-def _get_task(task: Any) -> Any:
-    """Return *task* if not None, else attempt to load ``QATask``, falling
-    back to ``_SimpleQATask`` if the import chain is unavailable."""
-    if task is not None:
-        return task
-    try:
-        from tasks.qa import QATask  # may fail if torch not installed
-        return QATask()
-    except Exception:
-        return _SimpleQATask()
+class MockScorerLLM:
+    """Scorer LLM stub for ``LLMRouter``.
 
+    Returns JSON scores preferring the expensive model.
+    """
+
+    def generate(self, prompt: str, max_new_tokens: int = 80) -> str:
+        return '[{"model": "cheap", "score": 0.4}, {"model": "expensive", "score": 0.8}]'
+
+
+# ---------------------------------------------------------------------------
+# QA metrics
+# ---------------------------------------------------------------------------
 
 def _tokenize(text: str) -> List[str]:
     return text.lower().split()
@@ -146,306 +122,27 @@ def compute_token_f1(prediction: str, ground_truth: str) -> float:
 
 
 def compute_exact_match(prediction: str, ground_truth: str) -> float:
+    """Return 1.0 if *prediction* matches *ground_truth* (case-insensitive, whitespace-trimmed), else 0.0."""
     return 1.0 if prediction.strip().lower() == ground_truth.strip().lower() else 0.0
 
 
-def evaluate_annotation_quality(annotated: List[Dict[str, Any]]) -> Dict[str, float]:
+def evaluate_annotation_quality(
+    annotated: List[Dict[str, Any]],
+    expensive_llm_name: str = "expensive",
+) -> Dict[str, float]:
     f1s = [compute_token_f1(str(r.get("annotation", "")), str(r.get("answer", ""))) for r in annotated]
     ems = [compute_exact_match(str(r.get("annotation", "")), str(r.get("answer", ""))) for r in annotated]
-    expensive_rate = sum(1 for r in annotated if r.get("routed_to") == "expensive") / max(1, len(annotated))
+    exp_rate = sum(1 for r in annotated if r.get("route") == expensive_llm_name) / max(1, len(annotated))
     return {
         "annotation_f1": round(sum(f1s) / len(f1s) if f1s else 0.0, 4),
         "annotation_em": round(sum(ems) / len(ems) if ems else 0.0, 4),
-        "expensive_call_rate": round(expensive_rate, 4),
+        "expensive_call_rate": round(exp_rate, 4),
     }
 
 
 # ---------------------------------------------------------------------------
-# Mock LLMs that simulate different quality levels
+# SFT JSONL
 # ---------------------------------------------------------------------------
-
-
-class _MockCheapLLM:
-    """Cheap LLM: frequently returns the correct answer but sometimes drifts."""
-
-    _NOISE = ["unknown", "various", "some", "multiple", "certain"]
-
-    def __init__(self, accuracy: float = CHEAP_LLM_ACCURACY, seed: int = 0) -> None:
-        import random
-        self._rng = random.Random(seed)
-        self._accuracy = accuracy
-
-    def _answer(self, prompt: str) -> str:
-        # Extract the answer from the prompt so we can simulate noise
-        import re
-        m = re.search(r"Answer:\s*(.*?)(?:\s|$)", prompt)
-        gt = m.group(1).strip() if m else "answer"
-        if self._rng.random() < self._accuracy:
-            return gt
-        words = gt.split() if gt else ["answer"]
-        words[-1] = self._rng.choice(self._NOISE)
-        return " ".join(words)
-
-    def generate(self, prompt: str, max_new_tokens: int = 64) -> str:
-        ans = self._answer(prompt)
-        return f"Answer: {ans} Confidence: 0.60"
-
-    def generate_with_logprobs(self, prompt: str, max_new_tokens: int = 64):
-        return self.generate(prompt), -0.8
-
-
-class _MockExpensiveLLM:
-    """Expensive LLM: mostly produces correct answers."""
-
-    _NOISE = ["unknown", "various"]
-
-    def __init__(self, accuracy: float = EXPENSIVE_LLM_ACCURACY, seed: int = 0) -> None:
-        import random
-        self._rng = random.Random(seed)
-        self._accuracy = accuracy
-
-    def _answer(self, prompt: str) -> str:
-        import re
-        m = re.search(r"Answer:\s*(.*?)(?:\s|$)", prompt)
-        gt = m.group(1).strip() if m else "answer"
-        if self._rng.random() < self._accuracy:
-            return gt
-        return self._rng.choice(self._NOISE)
-
-    def generate(self, prompt: str, max_new_tokens: int = 64) -> str:
-        ans = self._answer(prompt)
-        return f"Answer: {ans} Confidence: 0.90"
-
-    def generate_with_logprobs(self, prompt: str, max_new_tokens: int = 64):
-        return self.generate(prompt), -0.2
-
-
-class _MockJudgeLLM:
-    """Judge LLM that scores candidate answers (used by CascadeRouter & LLMRouter)."""
-
-    def generate(self, prompt: str, max_new_tokens: int = 64) -> str:
-        # CascadeRouter uses: "If correct output 1, else output 0."
-        # LLMRouter uses: JSON list of {model, score}
-        if "output 1" in prompt.lower() or "output 0" in prompt.lower():
-            # CascadeRouter judge — always say answer looks wrong so cascade escalates
-            return "0"
-        # LLMRouter judge — prefer the expensive model
-        return '[{"model": "cheap", "score": 0.4}, {"model": "expensive", "score": 0.8}]'
-
-
-# ---------------------------------------------------------------------------
-# Annotation helper
-# ---------------------------------------------------------------------------
-
-
-def _annotate_with_llm(
-    sample: Dict[str, Any],
-    llm: Any,
-    llm_name: str,
-    task: Any,
-) -> Dict[str, Any]:
-    prompt = task.get_prompt(sample)
-    raw = llm.generate(prompt, max_new_tokens=64)
-    parsed = task.parse_output(raw)
-    return {
-        **sample,
-        "annotation": parsed.get("annotation", ""),
-        "confidence": parsed.get("confidence", 0.5),
-        "routed_to": llm_name,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Routing conditions
-# ---------------------------------------------------------------------------
-
-
-def run_all_cheap(
-    dataset: List[Dict[str, Any]],
-    cheap_llm: Any,
-    task: Any,
-) -> List[Dict[str, Any]]:
-    return [_annotate_with_llm(s, cheap_llm, "cheap", task) for s in dataset]
-
-
-def run_all_expensive(
-    dataset: List[Dict[str, Any]],
-    expensive_llm: Any,
-    task: Any,
-) -> List[Dict[str, Any]]:
-    return [_annotate_with_llm(s, expensive_llm, "expensive", task) for s in dataset]
-
-
-def _load_cascade_router():
-    """Load CascadeRouter bypassing routers/__init__.py to avoid torch dependency."""
-    import importlib.util
-    _spec = importlib.util.spec_from_file_location(
-        "cascade_router_mod",
-        os.path.join(_ROOT, "routers", "cascade_router.py"),
-    )
-    _mod = importlib.util.module_from_spec(_spec)
-    # base_structure.base_router also cascades to torch; use a stub if needed
-    try:
-        _spec.loader.exec_module(_mod)
-        return _mod.CascadeRouter
-    except Exception:
-        return None
-
-
-def _load_llm_router():
-    """Load LLMRouter bypassing routers/__init__.py to avoid torch dependency."""
-    import importlib.util
-    _spec = importlib.util.spec_from_file_location(
-        "llm_router_mod",
-        os.path.join(_ROOT, "routers", "llm_router.py"),
-    )
-    _mod = importlib.util.module_from_spec(_spec)
-    try:
-        _spec.loader.exec_module(_mod)
-        return _mod.LLMRouter
-    except Exception:
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Inline fallback routing implementations
-# (mirrors CascadeRouter / LLMRouter logic without any torch dependency)
-# ---------------------------------------------------------------------------
-
-
-class _InlineCascadeRouter:
-    """Inline replica of CascadeRouter for environments without torch.
-
-    Algorithm: call the cheap LLM; ask the judge whether the answer looks
-    correct; escalate to the expensive LLM only when the judge says ``"0"``.
-    """
-
-    def __init__(self, judge_llm: Any, llm_dict: Dict[str, Any], threshold: float = 0.7):
-        self._judge = judge_llm
-        self._llm_dict = llm_dict
-        self._threshold = threshold
-
-    def route(self, prompt: str) -> str:
-        cheap_answer = self._llm_dict["cheap"].generate(prompt, max_new_tokens=64)
-        judge_prompt = (
-            f"Determine if the answer is correct.\n"
-            f"Question: {prompt[:200]}\nAnswer: {cheap_answer}\n"
-            "If correct output 1, else output 0."
-        )
-        verdict = self._judge.generate(judge_prompt).strip()
-        if "1" in verdict:
-            return "cheap"
-        return "expensive"
-
-
-class _InlineLLMRouter:
-    """Inline replica of LLMRouter for environments without torch.
-
-    Algorithm: ask the scorer LLM to output a JSON list of
-    ``{"model": ..., "score": ...}`` objects; pick the model with the
-    highest score.
-    """
-
-    def __init__(self, scorer: Any, candidate_llms: List[str]):
-        self._scorer = scorer
-        self._candidates = candidate_llms
-
-    def route(self, prompt: str) -> str:
-        score_prompt = (
-            "Rate which model is better for this text (output JSON array):\n"
-            f"Sample: {prompt[:200]}\n"
-            f"Candidates: {self._candidates}\n"
-            "Output: [{\"model\": \"cheap\", \"score\": 0.4}, {\"model\": \"expensive\", \"score\": 0.8}]"
-        )
-        raw = self._scorer.generate(score_prompt, max_new_tokens=80)
-        try:
-            start = raw.index("[")
-            end = raw.rindex("]")
-            parsed = json.loads(raw[start: end + 1])
-            best = max(parsed, key=lambda x: float(x.get("score", 0)))
-            return best["model"]
-        except Exception:
-            return self._candidates[0]
-
-
-def run_cascade(
-    dataset: List[Dict[str, Any]],
-    cheap_llm: Any,
-    expensive_llm: Any,
-    judge_llm: Any,
-    task: Any,
-    threshold: float = 0.7,
-) -> List[Dict[str, Any]]:
-    """CascadeRouter: annotate with cheap LLM; escalate if judge deems answer wrong.
-
-    Attempts to use the repository's ``CascadeRouter`` class; falls back to an
-    inline implementation when the torch-dependent import chain is unavailable.
-    """
-    llm_dict = {"cheap": cheap_llm, "expensive": expensive_llm}
-
-    CascadeRouter = _load_cascade_router()
-    if CascadeRouter is not None:
-        router = CascadeRouter(
-            judge_llm=judge_llm,
-            candidate_llm=["cheap", "expensive"],
-            llm_dict=llm_dict,
-            threshold=threshold,
-        )
-        def _get_chosen(prompt):
-            scores = router.score(prompt, ["cheap", "expensive"])
-            return max(scores, key=lambda x: x["score"])["model"]
-    else:
-        inline = _InlineCascadeRouter(judge_llm, llm_dict, threshold=threshold)
-        def _get_chosen(prompt):
-            return inline.route(prompt)
-
-    results = []
-    for sample in dataset:
-        prompt = task.get_prompt(sample)
-        chosen = _get_chosen(prompt)
-        llm = cheap_llm if chosen == "cheap" else expensive_llm
-        results.append(_annotate_with_llm(sample, llm, chosen, task))
-    return results
-
-
-def run_llm_router(
-    dataset: List[Dict[str, Any]],
-    cheap_llm: Any,
-    expensive_llm: Any,
-    judge_llm: Any,
-    task: Any,
-) -> List[Dict[str, Any]]:
-    """LLMRouter: ask the judge LLM to score each candidate and route accordingly.
-
-    Attempts to use the repository's ``LLMRouter`` class; falls back to an
-    inline implementation when the torch-dependent import chain is unavailable.
-    """
-    llm_dict = {"cheap": cheap_llm, "expensive": expensive_llm}
-
-    LLMRouter = _load_llm_router()
-    if LLMRouter is not None:
-        router = LLMRouter(scorer=judge_llm, candidate_llms=["cheap", "expensive"])
-        def _get_chosen(prompt):
-            scores = router.score(prompt, ["cheap", "expensive"])
-            return max(scores, key=lambda x: x["score"])["model"]
-    else:
-        inline = _InlineLLMRouter(scorer=judge_llm, candidate_llms=["cheap", "expensive"])
-        def _get_chosen(prompt):
-            return inline.route(prompt)
-
-    results = []
-    for sample in dataset:
-        prompt = task.get_prompt(sample)
-        chosen = _get_chosen(prompt)
-        llm = llm_dict.get(chosen, cheap_llm)
-        results.append(_annotate_with_llm(sample, llm, chosen, task))
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Write SFT JSONL
-# ---------------------------------------------------------------------------
-
 
 def write_sft_jsonl(annotated: List[Dict[str, Any]], path: str) -> int:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -464,9 +161,7 @@ def write_sft_jsonl(annotated: List[Dict[str, Any]], path: str) -> int:
 # Dataset helpers
 # ---------------------------------------------------------------------------
 
-
 def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]]:
-    import random
     rng = random.Random(seed)
     topics = [
         ("Albert Einstein", "Einstein developed the theory of relativity.", "relativity"),
@@ -491,8 +186,14 @@ def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]
 
 def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str, Any]]:
     if squad_path and os.path.exists(squad_path):
-        spec = __import__("datasets.qa_datasets", fromlist=["SquadDataset"])
-        ds = spec.SquadDataset.from_file(squad_path, max_samples=max_samples)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "qa_datasets",
+            os.path.join(_ROOT, "datasets", "qa_datasets.py"),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        ds = mod.SquadDataset.from_file(squad_path, max_samples=max_samples)
         return list(ds._data)
     return _make_synthetic_dataset(n=max_samples)
 
@@ -501,53 +202,103 @@ def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str
 # Experiment runner
 # ---------------------------------------------------------------------------
 
-
 def run_experiment(
     dataset: List[Dict[str, Any]],
     cheap_llm: Any,
     expensive_llm: Any,
     judge_llm: Any,
+    scorer_llm: Any,
     output_dir: str = "/tmp/routing_out",
     cascade_threshold: float = 0.7,
+    force_fallback: bool = True,
     task: Any = None,
 ) -> List[Dict[str, Any]]:
-    """Run all routing conditions and return result dicts.
+    """Run four routing conditions following the HumanLLMAnnotationSystem pattern.
 
-    Each result dict contains: ``condition``, ``annotated``,
-    ``annotation_f1``, ``annotation_em``, ``expensive_call_rate``,
-    ``sft_file``.
+    All conditions use the same ``ActiveLearningFilter`` pre-filter; only the
+    router changes.
 
     Parameters
     ----------
     dataset:
         QA samples to annotate.
     cheap_llm:
-        Fast / inexpensive LLM (lower quality).
+        Fast / inexpensive LLM.
     expensive_llm:
-        Slow / expensive LLM (higher quality).
+        Slow / capable LLM.
     judge_llm:
-        LLM used as judge / scorer by CascadeRouter and LLMRouter.
+        LLM used as judge by ``CascadeRouter``.
+    scorer_llm:
+        LLM used as scorer by ``LLMRouter``.
     output_dir:
         Directory for SFT JSONL outputs.
     cascade_threshold:
-        Quality threshold for cascade escalation.
+        Minimum quality score below which ``CascadeRouter`` escalates.
+    force_fallback:
+        Passed to ``ActiveLearningFilter`` for offline mode.
     task:
         Task object (default: ``QATask``).
-    """
-    task = _get_task(task)
 
+    Returns
+    -------
+    List of result dicts with keys ``condition``, ``annotated``,
+    ``annotation_f1``, ``annotation_em``, ``expensive_call_rate``,
+    ``sft_file``.
+    """
+    if task is None:
+        task = QATask()
     os.makedirs(output_dir, exist_ok=True)
 
+    candidate_llms = ["cheap", "expensive"]
+    llm_dict = {"cheap": cheap_llm, "expensive": expensive_llm}
+
+    # Shared filter (same for all conditions, as in HumanLLMAnnotationSystem)
+    al_filter = ActiveLearningFilter(
+        method="alps",
+        budget=len(dataset),
+        batch_size=max(2, len(dataset) // 10),
+        force_fallback=force_fallback,
+    )
+    filtered = al_filter.filter(dataset)
+
+    # Four routing conditions
+    def _annotate_no_router(llm_name: str) -> List[Dict[str, Any]]:
+        """Bypass routing: annotate every sample with a fixed LLM."""
+        kb_path = os.path.join(output_dir, f"kb_no_router_{llm_name}.json")
+        annotator = Annotator(candidate_llms, llm_dict, task=task, kb_path=kb_path)
+        return annotator.annotate_batch(filtered, assigned_llm=llm_name)
+
+    def _annotate_cascade() -> List[Dict[str, Any]]:
+        """CascadeRouter: cheap first, escalate when judge says wrong."""
+        kb_path = os.path.join(output_dir, "kb_cascade.json")
+        annotator = Annotator(candidate_llms, llm_dict, task=task, kb_path=kb_path)
+        router = CascadeRouter(
+            judge_llm=judge_llm,
+            candidate_llm=candidate_llms,
+            llm_dict=llm_dict,
+            threshold=cascade_threshold,
+        )
+        routed = router.route(filtered)
+        return annotator.annotate_batch(routed)
+
+    def _annotate_llm_router() -> List[Dict[str, Any]]:
+        """LLMRouter: scorer LLM picks the best candidate per sample."""
+        kb_path = os.path.join(output_dir, "kb_llm_router.json")
+        annotator = Annotator(candidate_llms, llm_dict, task=task, kb_path=kb_path)
+        router = LLMRouter(scorer=scorer_llm, candidate_llms=candidate_llms)
+        routed = router.route(filtered)
+        return annotator.annotate_batch(routed)
+
     conditions_data = [
-        ("All-cheap",      run_all_cheap(dataset, cheap_llm, task)),
-        ("All-expensive",  run_all_expensive(dataset, expensive_llm, task)),
-        ("Cascade",        run_cascade(dataset, cheap_llm, expensive_llm, judge_llm, task, cascade_threshold)),
-        ("LLM Router",     run_llm_router(dataset, cheap_llm, expensive_llm, judge_llm, task)),
+        ("All-cheap",    _annotate_no_router("cheap")),
+        ("All-expensive", _annotate_no_router("expensive")),
+        ("CascadeRouter", _annotate_cascade()),
+        ("LLMRouter",     _annotate_llm_router()),
     ]
 
     results = []
     for cond_name, annotated in conditions_data:
-        quality = evaluate_annotation_quality(annotated)
+        quality = evaluate_annotation_quality(annotated, expensive_llm_name="expensive")
         safe_name = re.sub(r"[() /\-]", "_", cond_name.lower()).strip("_")
         sft_path = os.path.join(output_dir, f"sft_routing_{safe_name}.jsonl")
         n_written = write_sft_jsonl(annotated, sft_path)
@@ -567,7 +318,6 @@ def run_experiment(
 # Reporting
 # ---------------------------------------------------------------------------
 
-
 def print_results_table(results: List[Dict[str, Any]]) -> None:
     header = (
         f"{'Condition':<18} {'Ann-F1':>7} {'Ann-EM':>7} {'Exp-Rate':>9} {'#Samples':>9}"
@@ -576,6 +326,7 @@ def print_results_table(results: List[Dict[str, Any]]) -> None:
     print("\n" + sep)
     print("  LLM Routing — Quality vs Cost Tradeoff")
     print("  (Exp-Rate = fraction of samples routed to expensive LLM)")
+    print("  (all conditions use the same ActiveLearningFilter + Annotator)")
     print(sep)
     print(header)
     print(sep)
@@ -594,22 +345,20 @@ def print_results_table(results: List[Dict[str, Any]]) -> None:
 # CLI entry point
 # ---------------------------------------------------------------------------
 
-
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="LLM Routing experiment: cost-quality tradeoff in QA annotation"
     )
     parser.add_argument("--samples", type=int, default=200)
     parser.add_argument("--squad-path", default="squad_train.json")
-    parser.add_argument("--cheap-model", default="Qwen/Qwen2.5-7B-Instruct",
-                        help="HuggingFace model name for cheap LLM")
-    parser.add_argument("--expensive-model", default="Qwen/Qwen2.5-72B-Instruct",
-                        help="HuggingFace model name for expensive LLM")
+    parser.add_argument("--cheap-model", default="Qwen/Qwen2.5-7B-Instruct")
+    parser.add_argument("--expensive-model", default="Qwen/Qwen2.5-72B-Instruct")
     parser.add_argument("--judge-model", default=None,
-                        help="HuggingFace model name for judge/scorer LLM (defaults to --cheap-model)")
+                        help="Judge LLM for CascadeRouter (defaults to --cheap-model)")
+    parser.add_argument("--scorer-model", default=None,
+                        help="Scorer LLM for LLMRouter (defaults to --cheap-model)")
     parser.add_argument("--cascade-threshold", type=float, default=0.7)
-    parser.add_argument("--skip-llm", action="store_true",
-                        help="Use mock LLMs (no GPU required)")
+    parser.add_argument("--skip-llm", action="store_true")
     parser.add_argument("--output-dir", default="/tmp/routing_out")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args(argv)
@@ -620,29 +369,30 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if args.skip_llm:
         print("Using mock LLMs (--skip-llm)")
-        cheap_llm: Any = _MockCheapLLM(accuracy=CHEAP_LLM_ACCURACY, seed=args.seed)
-        expensive_llm: Any = _MockExpensiveLLM(accuracy=EXPENSIVE_LLM_ACCURACY, seed=args.seed)
-        judge_llm: Any = _MockJudgeLLM()
+        cheap_llm: Any = MockAnnotationLLM()
+        expensive_llm: Any = MockAnnotationLLM()
+        judge_llm: Any = MockJudgeLLM()
+        scorer_llm: Any = MockScorerLLM()
+        force_fallback = True
     else:
         from misc.llm_provider import LocalLLM
-        print(f"Loading cheap LLM: {args.cheap_model}")
         cheap_llm = LocalLLM(args.cheap_model)
-        print(f"Loading expensive LLM: {args.expensive_model}")
         expensive_llm = LocalLLM(args.expensive_model)
         judge_name = args.judge_model or args.cheap_model
-        if judge_name == args.cheap_model:
-            judge_llm = cheap_llm
-        else:
-            print(f"Loading judge LLM: {judge_name}")
-            judge_llm = LocalLLM(judge_name)
+        judge_llm = cheap_llm if judge_name == args.cheap_model else LocalLLM(judge_name)
+        scorer_name = args.scorer_model or args.cheap_model
+        scorer_llm = cheap_llm if scorer_name == args.cheap_model else LocalLLM(scorer_name)
+        force_fallback = False
 
     results = run_experiment(
         dataset=dataset,
         cheap_llm=cheap_llm,
         expensive_llm=expensive_llm,
         judge_llm=judge_llm,
+        scorer_llm=scorer_llm,
         output_dir=args.output_dir,
         cascade_threshold=args.cascade_threshold,
+        force_fallback=force_fallback,
     )
 
     print_results_table(results)

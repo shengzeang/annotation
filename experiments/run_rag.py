@@ -1,39 +1,30 @@
 """Experiment: RAG-Augmented Annotation for QA.
 
-This experiment demonstrates how the repository's Retrieval-Augmented
-Generation (RAG) feature progressively improves annotation quality as the
-knowledge base accumulates high-confidence examples.
+This experiment demonstrates how enabling RAG (Retrieval-Augmented
+Generation) in the ``Annotator`` improves annotation quality as the
+knowledge base accumulates high-confidence examples.  The pipeline follows
+the same ``HumanLLMAnnotationSystem`` pattern from ``test.py``:
 
-Four conditions are compared on the same pool of QA samples:
+    filter → router.route() → annotator.annotate_batch()
 
-1. **No RAG**          – plain annotation without any retrieval context
-2. **RAG (Jaccard)**   – lightweight word-overlap retrieval (no extra deps)
-3. **RAG (TF-IDF)**    – scikit-learn TF-IDF cosine retrieval
-4. **RAG (semantic)**  – sentence-transformer cosine retrieval (requires
-                         ``sentence-transformers``; falls back to TF-IDF)
+Two conditions are compared, varying only the ``Annotator`` RAG configuration:
 
-For each condition the samples are processed in order, and the knowledge base
-is built online: each high-confidence annotation is immediately inserted and
-made available for subsequent retrievals.  Quality is reported both overall and
-in sliding windows of 50 samples so the improvement over time is visible.
+1. **No RAG**  – ``Annotator(rag=False)``:  plain LLM annotation without
+                  any KB retrieval context.
+2. **RAG**     – ``Annotator(rag=True)``:   each sample is annotated with
+                  retrieved similar QA pairs prepended to the prompt.  The KB
+                  grows progressively: high-confidence answers are added after
+                  each batch so later samples benefit from richer context.
 
-Real LLMs
----------
-Pass ``--model Qwen/Qwen2.5-7B-Instruct`` to use a real Qwen model.  The
-model prompt is augmented with up to ``--topk`` retrieved KB examples when
-RAG is enabled.
-
-Offline / test mode
--------------------
-Pass ``--skip-llm`` to use a ``MockLLM`` that returns a fixed template,
-making the experiment fully GPU-free and deterministic.
+Both conditions use the same ``ActiveLearningFilter`` + ``CascadeRouter``.
+Per-window token-F1 shows the improvement over time as the KB fills.
 
 Usage
 -----
-    # Offline smoke-test
+    # Offline smoke-test (no GPU / network required)
     python experiments/run_rag.py --samples 200 --skip-llm
 
-    # Real Qwen annotation
+    # Real Qwen annotation (requires GPU)
     python experiments/run_rag.py \\
         --samples 500 \\
         --model Qwen/Qwen2.5-7B-Instruct \\
@@ -46,81 +37,51 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
 # Sys-path fix
 # ---------------------------------------------------------------------------
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
-    sys.path.append(_ROOT)
+    sys.path.insert(0, _ROOT)
 
 # ---------------------------------------------------------------------------
-# Constants
+# Repository imports — actual system components
+# ---------------------------------------------------------------------------
+from annotation import Annotator
+from filters import ActiveLearningFilter
+from routers import CascadeRouter
+from tasks.qa import QATask
+
+
+# ---------------------------------------------------------------------------
+# Mock LLMs for offline testing
 # ---------------------------------------------------------------------------
 
-DEFAULT_CONFIDENCE: float = 0.85  # mock LLM always produces this confidence
-KB_CONFIDENCE_THRESHOLD: float = 0.70  # entries with >= this confidence enter the KB
+class MockLLM:
+    """Primary annotation LLM stub.  Returns QATask-parseable output."""
 
-# ---------------------------------------------------------------------------
-# Lightweight inline QA task (avoids torch-dependent import chain from tasks/)
-# ---------------------------------------------------------------------------
+    def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
+        return "Answer: test_answer Confidence: 0.85"
 
-
-class _SimpleQATask:
-    """Minimal QA task: build prompt and parse ``Answer: ... Confidence: ...``."""
-
-    def get_prompt(self, sample: Dict[str, Any], rag_examples: Any = None) -> str:
-        rag_str = ""
-        if rag_examples:
-            rag_str = "\nHere are some similar QA pairs:\n"
-            for ex in rag_examples:
-                rag_str += f"Q: {ex.get('question','')}\nA: {ex.get('annotation','')}\n"
-        return (
-            "Given the following question, answer as accurately as possible.\n"
-            "Output format: Answer: <your answer> Confidence: <0.0-1.0>\n"
-            f"Question: {sample.get('question', sample.get('text', ''))}\n"
-            f"Context: {sample.get('context', '')}\n"
-            f"{rag_str}"
-            "Answer:"
-        )
-
-    def parse_output(self, output: str) -> Dict[str, Any]:
-        annotation = "unknown"
-        confidence = None
-        m_conf = re.search(r"confidence\s*[:\-]?\s*([0-9]*\.?[0-9]+)", output, re.I)
-        if m_conf:
-            try:
-                confidence = float(m_conf.group(1))
-                if confidence > 1.0:
-                    confidence = min(1.0, confidence / 100.0)
-            except ValueError:
-                confidence = None
-        parts = re.split(r"confidence\s*[:\-]?", output, flags=re.I)
-        m_ans = re.search(r"answer\s*[:\-]?\s*(.*)", parts[0], re.I | re.S)
-        if m_ans:
-            annotation = m_ans.group(1).strip()
-        if confidence is None:
-            return {"annotation": annotation}
-        return {"annotation": annotation, "confidence": confidence}
+    def generate_with_logprobs(self, prompt: str, max_new_tokens: int = 50):
+        return self.generate(prompt), -0.2
 
 
-def _get_task(task: Any) -> Any:
-    if task is not None:
-        return task
-    try:
-        from tasks.qa import QATask
-        return QATask()
-    except Exception:
-        return _SimpleQATask()
+class MockJudgeLLM:
+    """Judge LLM stub for CascadeRouter — always keeps the cheap model."""
+
+    def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
+        return "1"
 
 
 # ---------------------------------------------------------------------------
 # QA metrics
 # ---------------------------------------------------------------------------
-
 
 def _tokenize(text: str) -> List[str]:
     return text.lower().split()
@@ -142,6 +103,7 @@ def compute_token_f1(prediction: str, ground_truth: str) -> float:
 
 
 def compute_exact_match(prediction: str, ground_truth: str) -> float:
+    """Return 1.0 if *prediction* matches *ground_truth* (case-insensitive, whitespace-trimmed), else 0.0."""
     return 1.0 if prediction.strip().lower() == ground_truth.strip().lower() else 0.0
 
 
@@ -154,251 +116,11 @@ def evaluate_annotation_quality(annotated: List[Dict[str, Any]]) -> Dict[str, fl
     }
 
 
-# ---------------------------------------------------------------------------
-# Mock LLM
-# ---------------------------------------------------------------------------
+def windowed_f1(annotated: List[Dict[str, Any]], window: int = 50) -> List[Dict[str, Any]]:
+    """Return mean token-F1 for successive non-overlapping windows.
 
-
-class MockLLM:
-    """LLM stub that returns a deterministic answer.
-
-    When RAG examples are embedded in the prompt the mock picks the most
-    recently provided example's annotation as its answer, simulating the
-    beneficial effect of in-context retrieval.
+    Shows how annotation quality trends as the KB grows over time.
     """
-
-    def generate(self, prompt: str, max_new_tokens: int = 64) -> str:
-        # If the prompt contains RAG examples, use the last one's answer
-        import re as _re
-        m = _re.findall(r"A:\s*(\S+)", prompt)
-        if m:
-            rag_ans = m[-1].strip()
-            return f"Answer: {rag_ans} Confidence: {DEFAULT_CONFIDENCE}"
-        return f"Answer: test_answer Confidence: {DEFAULT_CONFIDENCE}"
-
-    def generate_with_logprobs(self, prompt: str, max_new_tokens: int = 64):
-        return self.generate(prompt), -0.2
-
-
-# ---------------------------------------------------------------------------
-# In-memory knowledge bases (three retrieval backends)
-# ---------------------------------------------------------------------------
-
-
-class _JaccardKB:
-    """Word-overlap (Jaccard) in-memory KB — zero extra dependencies."""
-
-    def __init__(self) -> None:
-        self._entries: List[Dict[str, Any]] = []
-
-    def add(self, entry: Dict[str, Any]) -> None:
-        self._entries.append(entry)
-
-    def retrieve(self, question: str, topk: int = 3) -> List[Dict[str, Any]]:
-        if not self._entries:
-            return []
-        q_words = set(question.lower().split())
-        scored = []
-        for e in self._entries:
-            q2 = (e.get("question") or e.get("text") or "").lower()
-            union = q_words | set(q2.split())
-            score = len(q_words & set(q2.split())) / len(union) if union else 0.0
-            scored.append((score, e))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [e for _, e in scored[:topk] if _ > 0]
-
-    def __len__(self) -> int:
-        return len(self._entries)
-
-
-class _TFIDFKb:
-    """TF-IDF cosine-similarity in-memory KB (requires scikit-learn)."""
-
-    def __init__(self) -> None:
-        self._entries: List[Dict[str, Any]] = []
-        self._texts: List[str] = []
-
-    def add(self, entry: Dict[str, Any]) -> None:
-        self._entries.append(entry)
-        self._texts.append((entry.get("question") or entry.get("text") or "").strip() or " ")
-
-    def retrieve(self, question: str, topk: int = 3) -> List[Dict[str, Any]]:
-        if not self._entries:
-            return []
-        try:
-            from sklearn.feature_extraction.text import TfidfVectorizer
-            from sklearn.metrics.pairwise import cosine_similarity
-            import numpy as np
-
-            corpus = self._texts + [question]
-            vec = TfidfVectorizer(sublinear_tf=True)
-            mat = vec.fit_transform(corpus)
-            sims = cosine_similarity(mat[-1:], mat[:-1])[0]
-            top_idx = sims.argsort()[::-1][:topk]
-            return [self._entries[i] for i in top_idx if sims[i] > 0]
-        except Exception:
-            # fall back to Jaccard
-            fb = _JaccardKB()
-            fb._entries = self._entries
-            return fb.retrieve(question, topk)
-
-    def __len__(self) -> int:
-        return len(self._entries)
-
-
-class _SemanticKb:
-    """Sentence-transformer cosine-similarity KB.
-
-    Falls back to :class:`_TFIDFKb` when ``sentence-transformers`` is not installed.
-    """
-
-    def __init__(self, encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> None:
-        self._encoder_name = encoder_name
-        self._encoder = None
-        self._entries: List[Dict[str, Any]] = []
-        self._embs = None  # np.ndarray of shape [N, D]
-        self._fallback = _TFIDFKb()
-
-    def _get_encoder(self):
-        if self._encoder is None:
-            try:
-                from sentence_transformers import SentenceTransformer  # type: ignore
-                self._encoder = SentenceTransformer(self._encoder_name)
-            except Exception:
-                pass
-        return self._encoder
-
-    def add(self, entry: Dict[str, Any]) -> None:
-        self._entries.append(entry)
-        self._fallback.add(entry)
-        enc = self._get_encoder()
-        if enc is not None:
-            import numpy as np
-            text = (entry.get("question") or entry.get("text") or "").strip() or " "
-            try:
-                emb = enc.encode([text], show_progress_bar=False, convert_to_numpy=True).astype("float32")
-                self._embs = emb if self._embs is None else np.vstack([self._embs, emb])
-            except Exception:
-                pass
-
-    def retrieve(self, question: str, topk: int = 3) -> List[Dict[str, Any]]:
-        if not self._entries:
-            return []
-        enc = self._get_encoder()
-        if enc is not None and self._embs is not None:
-            try:
-                from sklearn.metrics.pairwise import cosine_similarity
-                q_emb = enc.encode([question], show_progress_bar=False, convert_to_numpy=True)
-                sims = cosine_similarity(q_emb, self._embs)[0]
-                import numpy as np
-                top_idx = sims.argsort()[::-1][:topk]
-                return [self._entries[i] for i in top_idx if sims[i] > 0]
-            except Exception:
-                pass
-        return self._fallback.retrieve(question, topk)
-
-    def __len__(self) -> int:
-        return len(self._entries)
-
-
-# ---------------------------------------------------------------------------
-# Core annotation function (single-sample, one KB backend)
-# ---------------------------------------------------------------------------
-
-
-def _annotate_one(
-    sample: Dict[str, Any],
-    llm: Any,
-    kb: Any,
-    task: Any,
-    topk: int = 3,
-    use_rag: bool = True,
-) -> Dict[str, Any]:
-    rag_examples = kb.retrieve(sample.get("question", ""), topk=topk) if (use_rag and kb is not None) else []
-    prompt = task.get_prompt(sample, rag_examples if rag_examples else None)
-    raw = llm.generate(prompt, max_new_tokens=64)
-    parsed = task.parse_output(raw)
-    annotation = parsed.get("annotation", "")
-    confidence = parsed.get("confidence", 0.5)
-    if not isinstance(confidence, (int, float)):
-        confidence = 0.5
-
-    result = {
-        **sample,
-        "annotation": annotation,
-        "confidence": float(confidence),
-        "kb_size_at_annotation": len(kb) if kb is not None else 0,
-        "rag_examples_used": len(rag_examples),
-    }
-
-    # Add to KB if high enough confidence
-    if kb is not None and float(confidence) >= KB_CONFIDENCE_THRESHOLD:
-        kb.add(result)
-
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Condition runners
-# ---------------------------------------------------------------------------
-
-
-def run_no_rag(
-    dataset: List[Dict[str, Any]],
-    llm: Any,
-    task: Any,
-) -> List[Dict[str, Any]]:
-    """Annotate without any RAG context."""
-    return [_annotate_one(s, llm, kb=None, task=task, use_rag=False) for s in dataset]
-
-
-def run_rag_jaccard(
-    dataset: List[Dict[str, Any]],
-    llm: Any,
-    task: Any,
-    topk: int = 3,
-) -> List[Dict[str, Any]]:
-    """RAG with word-overlap (Jaccard) retrieval."""
-    kb = _JaccardKB()
-    return [_annotate_one(s, llm, kb, task, topk=topk, use_rag=True) for s in dataset]
-
-
-def run_rag_tfidf(
-    dataset: List[Dict[str, Any]],
-    llm: Any,
-    task: Any,
-    topk: int = 3,
-) -> List[Dict[str, Any]]:
-    """RAG with TF-IDF cosine retrieval (requires scikit-learn)."""
-    kb = _TFIDFKb()
-    return [_annotate_one(s, llm, kb, task, topk=topk, use_rag=True) for s in dataset]
-
-
-def run_rag_semantic(
-    dataset: List[Dict[str, Any]],
-    llm: Any,
-    task: Any,
-    topk: int = 3,
-    encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-) -> List[Dict[str, Any]]:
-    """RAG with sentence-transformer semantic retrieval.
-
-    Falls back to TF-IDF when ``sentence-transformers`` is not installed.
-    """
-    kb = _SemanticKb(encoder_name=encoder_name)
-    return [_annotate_one(s, llm, kb, task, topk=topk, use_rag=True) for s in dataset]
-
-
-# ---------------------------------------------------------------------------
-# Windowed quality (shows improvement over time)
-# ---------------------------------------------------------------------------
-
-
-def windowed_f1(
-    annotated: List[Dict[str, Any]],
-    window: int = 50,
-) -> List[Dict[str, Any]]:
-    """Return mean token-F1 for successive non-overlapping windows."""
     windows = []
     for start in range(0, len(annotated), window):
         chunk = annotated[start: start + window]
@@ -414,9 +136,8 @@ def windowed_f1(
 
 
 # ---------------------------------------------------------------------------
-# Write SFT JSONL
+# SFT JSONL
 # ---------------------------------------------------------------------------
-
 
 def write_sft_jsonl(annotated: List[Dict[str, Any]], path: str) -> int:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -435,9 +156,7 @@ def write_sft_jsonl(annotated: List[Dict[str, Any]], path: str) -> int:
 # Dataset helpers
 # ---------------------------------------------------------------------------
 
-
 def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]]:
-    import random
     rng = random.Random(seed)
     topics = [
         ("Albert Einstein", "Einstein developed the theory of relativity.", "relativity"),
@@ -445,28 +164,36 @@ def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]
         ("Mount Everest", "Mount Everest is the highest mountain.", "highest"),
         ("Marie Curie", "Marie Curie discovered polonium and radium.", "polonium"),
         ("The Sun", "The Sun is the star at the center of the Solar System.", "star"),
-        ("Isaac Newton", "Newton formulated the laws of motion and universal gravitation.", "motion"),
+        ("Isaac Newton", "Newton formulated the laws of motion.", "motion"),
         ("William Shakespeare", "Shakespeare wrote plays including Hamlet.", "Hamlet"),
         ("Leonardo da Vinci", "Da Vinci painted the Mona Lisa.", "Mona Lisa"),
     ]
     dataset = []
     for i in range(n):
         subj, ctx, ans = topics[i % len(topics)]
+        extra = " ".join([f"word{j}" for j in range(rng.randint(0, 10))])
         q = f"What is associated with {subj}? (sample {i})"
+        context = ctx + (" " + extra if extra else "")
         dataset.append({
             "id": f"synthetic-{i}",
             "question": q,
-            "context": ctx,
+            "context": context,
             "answer": ans,
-            "text": f"Question: {q}\nContext: {ctx}",
+            "text": f"Question: {q}\nContext: {context}",
         })
     return dataset
 
 
 def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str, Any]]:
     if squad_path and os.path.exists(squad_path):
-        spec = __import__("datasets.qa_datasets", fromlist=["SquadDataset"])
-        ds = spec.SquadDataset.from_file(squad_path, max_samples=max_samples)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "qa_datasets",
+            os.path.join(_ROOT, "datasets", "qa_datasets.py"),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        ds = mod.SquadDataset.from_file(squad_path, max_samples=max_samples)
         return list(ds._data)
     return _make_synthetic_dataset(n=max_samples)
 
@@ -475,20 +202,21 @@ def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str
 # Experiment runner
 # ---------------------------------------------------------------------------
 
-
 def run_experiment(
     dataset: List[Dict[str, Any]],
     llm: Any,
+    judge_llm: Any,
     output_dir: str = "/tmp/rag_out",
     topk: int = 3,
     window: int = 50,
-    encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+    force_fallback: bool = True,
     task: Any = None,
 ) -> List[Dict[str, Any]]:
-    """Run all RAG conditions and return result dicts.
+    """Run RAG vs No-RAG annotation comparison.
 
-    Each result dict contains: ``condition``, ``annotated``, ``annotation_f1``,
-    ``annotation_em``, ``final_kb_size``, ``windowed_f1``, ``sft_file``.
+    Both conditions use the same ``ActiveLearningFilter`` + ``CascadeRouter``
+    pipeline — only the ``Annotator`` RAG flag differs.  This directly shows
+    the impact of knowledge-base retrieval on annotation quality.
 
     Parameters
     ----------
@@ -496,36 +224,75 @@ def run_experiment(
         QA samples to annotate.
     llm:
         LLM instance used for annotation.
+    judge_llm:
+        LLM used as judge by ``CascadeRouter``.
     output_dir:
-        Directory for SFT JSONL outputs.
+        Directory for SFT JSONL outputs and KB files.
     topk:
-        Number of KB entries to retrieve per sample.
+        Number of KB entries retrieved per sample when RAG is enabled.
     window:
-        Sliding-window size for per-window F1 computation.
-    encoder_name:
-        Sentence-transformer model name for semantic retrieval.
+        Sliding-window size for per-window F1 trend computation.
+    force_fallback:
+        Passed to ``ActiveLearningFilter`` for offline mode.
     task:
         Task object (default: ``QATask``).
-    """
-    task = _get_task(task)
 
+    Returns
+    -------
+    List of result dicts with keys ``condition``, ``annotated``,
+    ``annotation_f1``, ``annotation_em``, ``final_kb_size``,
+    ``windowed_f1``, ``sft_file``.
+    """
+    if task is None:
+        task = QATask()
     os.makedirs(output_dir, exist_ok=True)
 
-    conditions_runners = [
-        ("No RAG",        lambda: run_no_rag(dataset, llm, task)),
-        ("RAG (Jaccard)", lambda: run_rag_jaccard(dataset, llm, task, topk=topk)),
-        ("RAG (TF-IDF)",  lambda: run_rag_tfidf(dataset, llm, task, topk=topk)),
-        ("RAG (Semantic)", lambda: run_rag_semantic(dataset, llm, task, topk=topk, encoder_name=encoder_name)),
+    candidate_llms = ["primary"]
+    llm_dict = {"primary": llm}
+
+    # Shared filter — same for both conditions
+    al_filter = ActiveLearningFilter(
+        method="alps",
+        budget=len(dataset),
+        batch_size=max(2, len(dataset) // 10),
+        force_fallback=force_fallback,
+    )
+    filtered = al_filter.filter(dataset)
+
+    router = CascadeRouter(
+        judge_llm=judge_llm,
+        candidate_llm=candidate_llms,
+        llm_dict=llm_dict,
+    )
+    routed = router.route(filtered)
+
+    conditions = [
+        ("No RAG", False),
+        ("RAG",    True),
     ]
 
     results = []
-    for cond_name, runner in conditions_runners:
-        annotated = runner()
+    for cond_name, use_rag in conditions:
+        kb_path = os.path.join(output_dir, f"kb_{re.sub(r'[^a-z0-9]', '_', cond_name.lower())}.json")
+        annotator = Annotator(
+            candidate_llms,
+            llm_dict,
+            task=task,
+            rag=use_rag,
+            kb_path=kb_path,
+            # Pass topk via annotator's knowledge_base config
+        )
+        # For RAG condition, set the retrieve topk
+        if use_rag:
+            annotator.knowledge_base._topk = topk
+
+        annotated = annotator.annotate_batch(routed)
+
         quality = evaluate_annotation_quality(annotated)
         w_f1 = windowed_f1(annotated, window=window)
-        final_kb_size = max((r.get("kb_size_at_annotation", 0) for r in annotated), default=0)
+        final_kb_size = len(annotator.knowledge_base.entries) if use_rag else 0
 
-        safe_name = re.sub(r"[() /\-]", "_", cond_name.lower()).strip("_")
+        safe_name = re.sub(r"[^a-z0-9]", "_", cond_name.lower())
         sft_path = os.path.join(output_dir, f"sft_rag_{safe_name}.jsonl")
         n_written = write_sft_jsonl(annotated, sft_path)
 
@@ -546,20 +313,20 @@ def run_experiment(
 # Reporting
 # ---------------------------------------------------------------------------
 
-
-def print_results_table(results: List[Dict[str, Any]]) -> None:
+def print_results_table(results: List[Dict[str, Any]], window: int = 50) -> None:
     header = (
-        f"{'Condition':<18} {'Ann-F1':>7} {'Ann-EM':>7} {'KB-Final':>9} {'#Samples':>9}"
+        f"{'Condition':<12} {'Ann-F1':>7} {'Ann-EM':>7} {'KB-Final':>9} {'#Samples':>9}"
     )
     sep = "-" * len(header)
     print("\n" + sep)
     print("  RAG — Retrieval-Augmented QA Annotation Comparison")
+    print("  (both conditions use the same filter + CascadeRouter + Annotator)")
     print(sep)
     print(header)
     print(sep)
     for r in results:
         print(
-            f"{r['condition']:<18} "
+            f"{r['condition']:<12} "
             f"{r['annotation_f1']:>7.4f} "
             f"{r['annotation_em']:>7.4f} "
             f"{r['final_kb_size']:>9} "
@@ -568,41 +335,47 @@ def print_results_table(results: List[Dict[str, Any]]) -> None:
     print(sep)
 
     # Per-window F1 trend
-    print("\n  Per-window token-F1 (window shows KB growth benefit):")
-    hdr2 = f"  {'Condition':<18} " + "  ".join(
-        f"[{w['window_start']}-{w['window_end']}]" for w in (results[0]["windowed_f1"] if results else [])
-    )
-    print(hdr2)
-    for r in results:
-        row = f"  {r['condition']:<18} "
-        row += "  ".join(f"{w['mean_f1']:>14.4f}" for w in r["windowed_f1"])
-        print(row)
-    print()
+    if any(r.get("windowed_f1") for r in results):
+        cond_windows = {}
+        for r in results:
+            cond_windows[r["condition"]] = {
+                w["window_start"]: w["mean_f1"]
+                for w in r.get("windowed_f1", [])
+            }
+
+        all_starts = sorted({s for wmap in cond_windows.values() for s in wmap})
+        if all_starts:
+            win_size = window
+            col_labels = [f"[{s}-{s + win_size - 1}]" for s in all_starts]
+            col_w = max(8, *(len(c) for c in col_labels))
+            hdr = f"\n  Per-window token-F1 (higher later = KB growing helps):\n"
+            hdr += f"  {'Condition':<12} " + " ".join(f"{c:>{col_w}}" for c in col_labels)
+            print(hdr)
+            for r in results:
+                wmap = cond_windows[r["condition"]]
+                row = f"  {r['condition']:<12} "
+                row += " ".join(f"{wmap.get(s, 0.0):>{col_w}.4f}" for s in all_starts)
+                print(row)
+    print("")
 
 
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
-
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
-        description="RAG experiment: annotation quality vs retrieval strategy"
+        description="RAG-augmented annotation experiment for QA"
     )
     parser.add_argument("--samples", type=int, default=200)
     parser.add_argument("--squad-path", default="squad_train.json")
-    parser.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct",
-                        help="HuggingFace model name for annotation LLM")
-    parser.add_argument("--skip-llm", action="store_true",
-                        help="Use mock LLM (no GPU required)")
-    parser.add_argument("--topk", type=int, default=3,
-                        help="Number of KB examples to retrieve per sample (default: 3)")
-    parser.add_argument("--window", type=int, default=50,
-                        help="Sliding-window size for per-window F1 (default: 50)")
-    parser.add_argument("--encoder-name", default="sentence-transformers/all-MiniLM-L6-v2",
-                        help="Sentence-transformer model for semantic RAG")
+    parser.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct")
+    parser.add_argument("--judge-model", default=None,
+                        help="Judge LLM for CascadeRouter (defaults to --model)")
+    parser.add_argument("--topk", type=int, default=3)
+    parser.add_argument("--window", type=int, default=50)
+    parser.add_argument("--skip-llm", action="store_true")
     parser.add_argument("--output-dir", default="/tmp/rag_out")
-    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args(argv)
 
     print(f"Loading dataset (max {args.samples} samples)…")
@@ -610,23 +383,28 @@ def main(argv: Optional[List[str]] = None) -> None:
     print(f"Loaded {len(dataset)} samples.")
 
     if args.skip_llm:
-        print("Using MockLLM (--skip-llm)")
+        print("Using mock LLMs (--skip-llm)")
         llm: Any = MockLLM()
+        judge_llm: Any = MockJudgeLLM()
+        force_fallback = True
     else:
         from misc.llm_provider import LocalLLM
-        print(f"Loading LLM: {args.model}")
         llm = LocalLLM(args.model)
+        judge_name = args.judge_model or args.model
+        judge_llm = llm if judge_name == args.model else LocalLLM(judge_name)
+        force_fallback = False
 
     results = run_experiment(
         dataset=dataset,
         llm=llm,
+        judge_llm=judge_llm,
         output_dir=args.output_dir,
         topk=args.topk,
         window=args.window,
-        encoder_name=args.encoder_name,
+        force_fallback=force_fallback,
     )
 
-    print_results_table(results)
+    print_results_table(results, window=args.window)
 
     summary_path = os.path.join(args.output_dir, "rag_summary.json")
     os.makedirs(args.output_dir, exist_ok=True)
