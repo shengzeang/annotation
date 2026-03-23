@@ -57,6 +57,13 @@ from filters import ActiveLearningFilter
 from routers import CascadeRouter
 from tasks.qa import QATask
 
+# Default candidate LLMs — shared with test.py / HumanLLMAnnotationSystem.
+DEFAULT_CANDIDATE_LLMS: List[str] = [
+    "Qwen/Qwen2.5-3B-Instruct",
+    "Qwen/Qwen2.5-7B-Instruct",
+    "Qwen/Qwen2.5-14B-Instruct",
+]
+
 
 # ---------------------------------------------------------------------------
 # Mock LLMs for offline testing
@@ -211,6 +218,8 @@ def run_experiment(
     window: int = 50,
     force_fallback: bool = True,
     task: Any = None,
+    candidate_llms: Optional[List[str]] = None,
+    llm_dict: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Run RAG vs No-RAG annotation comparison.
 
@@ -236,6 +245,13 @@ def run_experiment(
         Passed to ``ActiveLearningFilter`` for offline mode.
     task:
         Task object (default: ``QATask``).
+    candidate_llms:
+        Ordered list of LLM identifiers available for routing.  When
+        provided, ``llm_dict`` must also be supplied.  Defaults to the
+        single-entry ``["primary"]`` fallback using ``llm``.
+    llm_dict:
+        Mapping from LLM identifier to LLM instance.  Must be consistent
+        with ``candidate_llms``.
 
     Returns
     -------
@@ -247,8 +263,11 @@ def run_experiment(
         task = QATask()
     os.makedirs(output_dir, exist_ok=True)
 
-    candidate_llms = ["primary"]
-    llm_dict = {"primary": llm}
+    # Use caller-supplied candidate list (full pipeline) or fall back to a
+    # single "primary" entry for backward-compatible / mock-mode calls.
+    if candidate_llms is None or llm_dict is None:
+        candidate_llms = ["primary"]
+        llm_dict = {"primary": llm}
 
     # Shared filter — same for both conditions
     al_filter = ActiveLearningFilter(
@@ -371,9 +390,14 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
     parser.add_argument("--samples", type=int, default=200)
     parser.add_argument("--squad-path", default="squad_train.json")
-    parser.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct")
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=DEFAULT_CANDIDATE_LLMS,
+        help="Candidate LLMs to annotate with (default: the 3 standard Qwen models)",
+    )
     parser.add_argument("--judge-model", default=None,
-                        help="Judge LLM for CascadeRouter (defaults to --model)")
+                        help="Judge LLM for CascadeRouter (defaults to last --models entry)")
     parser.add_argument("--topk", type=int, default=3)
     parser.add_argument("--window", type=int, default=50)
     parser.add_argument("--skip-llm", action="store_true")
@@ -389,11 +413,18 @@ def main(argv: Optional[List[str]] = None) -> None:
         llm: Any = MockLLM()
         judge_llm: Any = MockJudgeLLM()
         force_fallback = True
+        # In mock mode keep the single-entry fallback for lightweight testing
+        _candidate_llms = None
+        _llm_dict = None
     else:
         from misc.llm_provider import LocalLLM
-        llm = LocalLLM(args.model)
-        judge_name = args.judge_model or args.model
-        judge_llm = llm if judge_name == args.model else LocalLLM(judge_name)
+        models = args.models
+        print(f"Loading LLMs: {models}")
+        _llm_dict = {m: LocalLLM(m) for m in models}
+        _candidate_llms = models
+        llm = _llm_dict[models[0]]
+        judge_name = args.judge_model or models[-1]
+        judge_llm = _llm_dict.get(judge_name) or LocalLLM(judge_name)
         force_fallback = False
 
     results = run_experiment(
@@ -404,6 +435,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         topk=args.topk,
         window=args.window,
         force_fallback=force_fallback,
+        candidate_llms=_candidate_llms,
+        llm_dict=_llm_dict,
     )
 
     print_results_table(results, window=args.window)

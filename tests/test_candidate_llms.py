@@ -658,6 +658,23 @@ class TestDefaultCandidateLLMs(unittest.TestCase):
             "DEFAULT_CANDIDATE_LLMS must be identical in test.py and api/server.py",
         )
 
+    def test_experiment_modules_define_same_constant(self):
+        """All experiment scripts must define DEFAULT_CANDIDATE_LLMS identical to
+        the full pipeline."""
+        import test as pipeline_module
+        from experiments import run_active_learning, run_rag, run_llm_routing
+        expected = pipeline_module.DEFAULT_CANDIDATE_LLMS
+        for mod in (run_active_learning, run_rag, run_llm_routing):
+            self.assertTrue(
+                hasattr(mod, 'DEFAULT_CANDIDATE_LLMS'),
+                f"{mod.__name__} must define DEFAULT_CANDIDATE_LLMS",
+            )
+            self.assertEqual(
+                mod.DEFAULT_CANDIDATE_LLMS,
+                expected,
+                f"{mod.__name__}.DEFAULT_CANDIDATE_LLMS must match test.py",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

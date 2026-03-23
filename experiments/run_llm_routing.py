@@ -62,6 +62,16 @@ from filters import ActiveLearningFilter
 from routers import CascadeRouter, LLMRouter
 from tasks.qa import QATask
 
+# Default candidate LLMs — shared with test.py / HumanLLMAnnotationSystem.
+# In this routing experiment, the first entry is the "cheap" model and the
+# last entry is the "expensive" model; the middle entry (if present) acts as
+# an intermediate tier.
+DEFAULT_CANDIDATE_LLMS: List[str] = [
+    "Qwen/Qwen2.5-3B-Instruct",
+    "Qwen/Qwen2.5-7B-Instruct",
+    "Qwen/Qwen2.5-14B-Instruct",
+]
+
 
 # ---------------------------------------------------------------------------
 # Mock LLMs for offline testing
@@ -212,6 +222,8 @@ def run_experiment(
     cascade_threshold: float = 0.7,
     force_fallback: bool = True,
     task: Any = None,
+    candidate_llms: Optional[List[str]] = None,
+    llm_dict: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Run four routing conditions following the HumanLLMAnnotationSystem pattern.
 
@@ -238,6 +250,13 @@ def run_experiment(
         Passed to ``ActiveLearningFilter`` for offline mode.
     task:
         Task object (default: ``QATask``).
+    candidate_llms:
+        Ordered list of LLM identifiers (first = cheapest, last = most
+        capable).  When provided, ``llm_dict`` must also be supplied.
+        Defaults to the two-entry ``["cheap", "expensive"]`` fallback.
+    llm_dict:
+        Mapping from LLM identifier to LLM instance.  Must be consistent
+        with ``candidate_llms``.
 
     Returns
     -------
@@ -249,8 +268,16 @@ def run_experiment(
         task = QATask()
     os.makedirs(output_dir, exist_ok=True)
 
-    candidate_llms = ["cheap", "expensive"]
-    llm_dict = {"cheap": cheap_llm, "expensive": expensive_llm}
+    # Use caller-supplied candidate list (full pipeline) or fall back to the
+    # two-entry symbolic mapping for backward-compatible / mock-mode calls.
+    if candidate_llms is None or llm_dict is None:
+        candidate_llms = ["cheap", "expensive"]
+        llm_dict = {"cheap": cheap_llm, "expensive": expensive_llm}
+
+    # For "all-cheap" and "all-expensive" conditions, use the first and last
+    # entries of the candidate list respectively.
+    cheap_name = candidate_llms[0]
+    expensive_name = candidate_llms[-1]
 
     # Shared filter (same for all conditions, as in HumanLLMAnnotationSystem)
     al_filter = ActiveLearningFilter(
@@ -291,9 +318,9 @@ def run_experiment(
 
     _N = 4
     print(f"\n[1/{_N}] Running condition: All-cheap …")
-    _data_cheap = _annotate_no_router("cheap")
+    _data_cheap = _annotate_no_router(cheap_name)
     print(f"\n[2/{_N}] Running condition: All-expensive …")
-    _data_expensive = _annotate_no_router("expensive")
+    _data_expensive = _annotate_no_router(expensive_name)
     print(f"\n[3/{_N}] Running condition: CascadeRouter …")
     _data_cascade = _annotate_cascade()
     print(f"\n[4/{_N}] Running condition: LLMRouter …")
@@ -308,7 +335,7 @@ def run_experiment(
 
     results = []
     for cond_name, annotated in conditions_data:
-        quality = evaluate_annotation_quality(annotated, expensive_llm_name="expensive")
+        quality = evaluate_annotation_quality(annotated, expensive_llm_name=expensive_name)
         safe_name = re.sub(r"[() /\-]", "_", cond_name.lower()).strip("_")
         sft_path = os.path.join(output_dir, f"sft_routing_{safe_name}.jsonl")
         n_written = write_sft_jsonl(annotated, sft_path)
@@ -361,12 +388,19 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
     parser.add_argument("--samples", type=int, default=200)
     parser.add_argument("--squad-path", default="squad_train.json")
-    parser.add_argument("--cheap-model", default="Qwen/Qwen2.5-7B-Instruct")
-    parser.add_argument("--expensive-model", default="Qwen/Qwen2.5-72B-Instruct")
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=DEFAULT_CANDIDATE_LLMS,
+        help=(
+            "Ordered list of candidate LLMs (first = cheapest, last = most capable). "
+            "Default: the 3 standard Qwen models."
+        ),
+    )
     parser.add_argument("--judge-model", default=None,
-                        help="Judge LLM for CascadeRouter (defaults to --cheap-model)")
+                        help="Judge LLM for CascadeRouter (defaults to last --models entry)")
     parser.add_argument("--scorer-model", default=None,
-                        help="Scorer LLM for LLMRouter (defaults to --cheap-model)")
+                        help="Scorer LLM for LLMRouter (defaults to first --models entry)")
     parser.add_argument("--cascade-threshold", type=float, default=0.7)
     parser.add_argument("--skip-llm", action="store_true")
     parser.add_argument("--output-dir", default="/tmp/routing_out")
@@ -384,14 +418,21 @@ def main(argv: Optional[List[str]] = None) -> None:
         judge_llm: Any = MockJudgeLLM()
         scorer_llm: Any = MockScorerLLM()
         force_fallback = True
+        # In mock mode keep the two-entry fallback for lightweight testing
+        _candidate_llms = None
+        _llm_dict = None
     else:
         from misc.llm_provider import LocalLLM
-        cheap_llm = LocalLLM(args.cheap_model)
-        expensive_llm = LocalLLM(args.expensive_model)
-        judge_name = args.judge_model or args.cheap_model
-        judge_llm = cheap_llm if judge_name == args.cheap_model else LocalLLM(judge_name)
-        scorer_name = args.scorer_model or args.cheap_model
-        scorer_llm = cheap_llm if scorer_name == args.cheap_model else LocalLLM(scorer_name)
+        models = args.models
+        print(f"Loading LLMs: {models}")
+        _llm_dict = {m: LocalLLM(m) for m in models}
+        _candidate_llms = models
+        cheap_llm = _llm_dict[models[0]]
+        expensive_llm = _llm_dict[models[-1]]
+        judge_name = args.judge_model or models[-1]
+        judge_llm = _llm_dict.get(judge_name) or LocalLLM(judge_name)
+        scorer_name = args.scorer_model or models[0]
+        scorer_llm = _llm_dict.get(scorer_name) or LocalLLM(scorer_name)
         force_fallback = False
 
     results = run_experiment(
@@ -403,6 +444,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         output_dir=args.output_dir,
         cascade_threshold=args.cascade_threshold,
         force_fallback=force_fallback,
+        candidate_llms=_candidate_llms,
+        llm_dict=_llm_dict,
     )
 
     print_results_table(results)
