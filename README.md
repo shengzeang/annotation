@@ -77,6 +77,52 @@ The frontend of DataFlow-Annotator is built using **React-Flow** for the user in
 - **`tasks/`**: Task definitions and parsing logic (QA, classification, NER, summarization, translation).
 - **`datasets/`**: Lightweight dataset adapters and converters (SQuAD helpers, generic QA parsers).
 - **`misc/`**: Helper scripts, evaluation tools, and providers (e.g., `evaluate.py`, `llm_provider.py`).
+- **`experiments/`**: Self-contained experiment scripts (no GPU required) that compare annotation conditions and estimate downstream fine-tuning performance.
+
+---
+
+## 🧪 Experiments
+
+### Label Studio vs DataFlow-Annotator — QA Annotation Comparison
+
+`experiments/run_label_studio_comparison.py` benchmarks DataFlow-Annotator
+against Label Studio–style human annotation using **QA fine-tuning as the
+downstream evaluation task**.  It is fully self-contained (no GPU, no network
+access required) and uses a Natarajan noise-degradation model to estimate the
+performance of a small LLM fine-tuned on each annotated dataset.
+
+**Five conditions are compared:**
+
+| Condition | Description |
+|---|---|
+| Label Studio (3 annotators) | Majority vote across 3 human annotators (85 % per-annotator accuracy) |
+| Label Studio (1 annotator) | Single human annotator (75 % accuracy) |
+| DataFlow (naive LLM) | Baseline LLM annotation without KB/RAG |
+| DataFlow (KB + RAG) | LLM annotation with knowledge-base retrieval augmentation |
+| DataFlow (full pipeline) | KB + RAG + periodic outlier purge |
+
+**Metrics reported:**
+
+- `Ann-F1` / `Ann-EM` — mean token-level F1 and exact-match of annotations vs ground truth
+- `DS-EM` / `DS-F1` — estimated downstream exact-match / F1 of a small LLM fine-tuned on the annotated data
+
+**Usage:**
+
+```bash
+# Synthetic data (no SQuAD file needed)
+python experiments/run_label_studio_comparison.py --samples 500
+
+# With a local SQuAD v1.1 JSON file
+python experiments/run_label_studio_comparison.py \
+    --samples 500 \
+    --squad-path path/to/train-v1.1.json \
+    --output-dir /tmp/sft_out \
+    --seed 42
+```
+
+The script writes one SFT JSONL file per condition (suitable for
+instruction-tuning small models such as T5-small or Phi-2) and a
+`comparison_summary.json` to `--output-dir`.
 
 ---
 
