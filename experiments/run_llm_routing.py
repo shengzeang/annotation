@@ -276,8 +276,8 @@ def run_experiment(
 
     # For "all-cheap" and "all-expensive" conditions, use the first and last
     # entries of the candidate list respectively.
-    cheap_name = candidate_llms[0]
-    expensive_name = candidate_llms[-1]
+    cheap_name = candidate_llms[0].split("/")[-1]  # Use model name suffix for readability  
+    expensive_name = candidate_llms[-1].split("/")[-1]  # Use model name suffix for readability
 
     # Shared filter (same for all conditions, as in HumanLLMAnnotationSystem)
     al_filter = ActiveLearningFilter(
