@@ -351,7 +351,7 @@ def process_run_graph(payload: Dict[str, Any], run_id: str):
                     max_samples = int(params.get('max_samples', 200))
                     if ds == 'squad':
                         try:
-                            from datasets import SquadDataset
+                            from qa_data import SquadDataset
                             tmp_path = os.path.join(ROOT_DIR, 'squad_tmp.json')
                             data = SquadDataset.from_url(save_path=tmp_path, max_samples=max_samples)
                         except Exception as e:
@@ -362,7 +362,7 @@ def process_run_graph(payload: Dict[str, Any], run_id: str):
                                 fp = p if os.path.isabs(p) else os.path.join(ROOT_DIR, p)
                                 tried.append(fp)
                                 try:
-                                    from datasets import SquadDataset
+                                    from qa_data import SquadDataset
                                     if os.path.exists(fp):
                                         try:
                                             data = SquadDataset.from_file(fp, max_samples=max_samples)

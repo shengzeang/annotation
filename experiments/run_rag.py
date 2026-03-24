@@ -196,7 +196,7 @@ def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "qa_datasets",
-            os.path.join(_ROOT, "datasets", "qa_datasets.py"),
+            os.path.join(_ROOT, "qa_data", "qa_datasets.py"),
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)

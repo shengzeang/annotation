@@ -75,7 +75,7 @@ The frontend of DataFlow-Annotator is built using **React-Flow** for the user in
 - **`routers/`**: Router implementations (cascade, knn, mlp, llm, routerdc, graph, etc.).
 - **`filters/`**: Filter implementations (active learning, dataflow adapters, LLM-based filters).
 - **`tasks/`**: Task definitions and parsing logic (QA, classification, NER, summarization, translation).
-- **`datasets/`**: Lightweight dataset adapters and converters (SQuAD helpers, generic QA parsers).
+- **`qa_data/`**: Lightweight dataset adapters and converters (SQuAD helpers, generic QA parsers).
 - **`misc/`**: Helper scripts, evaluation tools, and providers (e.g., `evaluate.py`, `llm_provider.py`).
 - **`experiments/`**: Experiment scripts comparing annotation conditions with real Qwen LLMs and optional downstream fine-tuning.
 

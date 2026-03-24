@@ -5,7 +5,7 @@ from annotation import Annotator
 from filters import ActiveLearningFilter, LLMNaiveFilter
 from routers import KNNRouter, CascadeRouter
 from tasks.qa import QATask
-from datasets import SquadDataset
+from qa_data import SquadDataset
 from utils import export_annotation_results
 from misc.llm_provider import LocalLLM, APILLM
 from scripts.select_best_route import select_best
