@@ -25,6 +25,12 @@ from experiments.run_rag import (
     windowed_f1,
     write_sft_jsonl,
     _make_synthetic_dataset,
+    _safe_name,
+    _condition_result_path,
+    _sft_output_path,
+    _condition_already_done,
+    _load_condition_result,
+    _save_condition_result,
 )
 
 
@@ -302,6 +308,113 @@ class TestConditionProgressBanners(unittest.TestCase):
         out = self._captured_output()
         self.assertIn("[1/2]", out)
         self.assertIn("[2/2]", out)
+
+
+# ---------------------------------------------------------------------------
+# Resume mechanism (_condition_already_done / helpers / skip on second run)
+# ---------------------------------------------------------------------------
+
+class TestResumeMechanismRAG(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.dataset = _make_dataset(n=12)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _run(self):
+        return run_experiment(
+            dataset=self.dataset,
+            llm=MockLLM(),
+            judge_llm=MockJudgeLLM(),
+            output_dir=self.tmp_dir,
+            force_fallback=True,
+        )
+
+    def test_not_done_initially(self):
+        for cond in ("No RAG", "RAG"):
+            self.assertFalse(_condition_already_done(cond, self.tmp_dir))
+
+    def test_all_conditions_done_after_run(self):
+        self._run()
+        for cond in ("No RAG", "RAG"):
+            self.assertTrue(
+                _condition_already_done(cond, self.tmp_dir),
+                f"Expected cached output for '{cond}' after run",
+            )
+
+    def test_second_run_skips_all_conditions(self):
+        import io, contextlib
+        self._run()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self._run()
+        self.assertIn("Already done", buf.getvalue())
+
+    def test_second_run_returns_same_results(self):
+        r1 = self._run()
+        r2 = self._run()
+        self.assertEqual(len(r1), len(r2))
+        for a, b in zip(r1, r2):
+            self.assertEqual(a["condition"], b["condition"])
+            self.assertAlmostEqual(a["annotation_f1"], b["annotation_f1"])
+
+    def test_sft_file_alone_triggers_done(self):
+        cond = "No RAG"
+        sft_path = _sft_output_path(cond, self.tmp_dir)
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        with open(sft_path, "w") as f:
+            f.write('{"instruction": "Q", "output": "A"}\n')
+        self.assertTrue(_condition_already_done(cond, self.tmp_dir))
+
+    def test_sft_file_only_run_returns_result(self):
+        cond = "No RAG"
+        sft_path = _sft_output_path(cond, self.tmp_dir)
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        with open(sft_path, "w") as f:
+            for i in range(3):
+                f.write(f'{{"instruction": "Q{i}", "output": "A{i}"}}\n')
+        results = self._run()
+        no_rag = next(r for r in results if r["condition"] == cond)
+        for k in ("condition", "annotated", "annotation_f1", "annotation_em", "sft_file"):
+            self.assertIn(k, no_rag)
+        self.assertEqual(no_rag["annotated"], 3)
+
+    def test_safe_name_helper(self):
+        self.assertEqual(_safe_name("No RAG"), "no_rag")
+        self.assertEqual(_safe_name("RAG"), "rag")
+
+    def test_save_load_result_roundtrip(self):
+        result = {
+            "condition": "No RAG",
+            "annotated": 12,
+            "annotation_f1": 0.5,
+            "annotation_em": 0.3,
+            "final_kb_size": 0,
+            "windowed_f1": [],
+            "sft_file": "/tmp/foo.jsonl",
+        }
+        _save_condition_result(result, self.tmp_dir)
+        self.assertTrue(_condition_already_done("No RAG", self.tmp_dir))
+        loaded = _load_condition_result("No RAG", self.tmp_dir)
+        self.assertEqual(loaded["condition"], result["condition"])
+        self.assertAlmostEqual(loaded["annotation_f1"], result["annotation_f1"])
+
+    def test_routing_skipped_when_all_done(self):
+        """When all conditions are already done, routing should not be computed."""
+        import io, contextlib
+        # Pre-create both SFT files so all conditions are marked done
+        for cond in ("No RAG", "RAG"):
+            sft_path = _sft_output_path(cond, self.tmp_dir)
+            with open(sft_path, "w") as f:
+                f.write('{"instruction": "Q", "output": "A"}\n')
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            results = self._run()
+        # Both conditions should be reported as skipped
+        self.assertEqual(buf.getvalue().count("Already done"), 2)
+        self.assertEqual(len(results), 2)
 
 
 if __name__ == "__main__":

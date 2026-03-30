@@ -26,6 +26,12 @@ from experiments.run_label_studio_comparison import (
     run_experiment,
     write_sft_jsonl,
     DEFAULT_CANDIDATE_LLMS,
+    _safe_name,
+    _condition_result_path,
+    _sft_output_path,
+    _condition_already_done,
+    _load_condition_result,
+    _save_condition_result,
 )
 
 
@@ -406,6 +412,108 @@ class TestConditionProgressBanners(unittest.TestCase):
         ]
         self.assertEqual(positions, sorted(positions),
                          "Condition banners must appear in order 1-5")
+
+
+# ---------------------------------------------------------------------------
+# Resume mechanism (_condition_already_done / helpers / skip on second run)
+# ---------------------------------------------------------------------------
+
+_ALL_LSC_CONDS = (
+    "Single Oracle",
+    "3-Oracle Majority Vote",
+    "DataFlow (naive LLM)",
+    "DataFlow (KB + RAG)",
+    "DataFlow (full pipeline)",
+)
+
+
+class TestResumeMechanismLSC(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.dataset = _make_dataset(n=10)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _run(self):
+        return run_experiment(
+            dataset=self.dataset,
+            oracle_llm=MockAnnotationLLM(),
+            judge_llm=MockJudgeLLM(),
+            output_dir=self.tmp_dir,
+            skip_finetune=True,
+            force_fallback=True,
+        )
+
+    def test_not_done_initially(self):
+        for cond in _ALL_LSC_CONDS:
+            self.assertFalse(_condition_already_done(cond, self.tmp_dir))
+
+    def test_all_conditions_done_after_run(self):
+        self._run()
+        for cond in _ALL_LSC_CONDS:
+            self.assertTrue(
+                _condition_already_done(cond, self.tmp_dir),
+                f"Expected cached output for '{cond}' after run",
+            )
+
+    def test_second_run_skips_all_conditions(self):
+        import io, contextlib
+        self._run()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self._run()
+        self.assertIn("Already done", buf.getvalue())
+
+    def test_second_run_returns_same_results(self):
+        r1 = self._run()
+        r2 = self._run()
+        self.assertEqual(len(r1), len(r2))
+        for a, b in zip(r1, r2):
+            self.assertEqual(a["condition"], b["condition"])
+            self.assertAlmostEqual(a["annotation_f1"], b["annotation_f1"])
+
+    def test_sft_file_alone_triggers_done(self):
+        cond = "Single Oracle"
+        sft_path = _sft_output_path(cond, self.tmp_dir)
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        with open(sft_path, "w") as f:
+            f.write('{"instruction": "Q", "output": "A"}\n')
+        self.assertTrue(_condition_already_done(cond, self.tmp_dir))
+
+    def test_sft_file_only_run_returns_result(self):
+        cond = "Single Oracle"
+        sft_path = _sft_output_path(cond, self.tmp_dir)
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        with open(sft_path, "w") as f:
+            for i in range(5):
+                f.write(f'{{"instruction": "Q{i}", "output": "A{i}"}}\n')
+        results = self._run()
+        oracle = next(r for r in results if r["condition"] == cond)
+        for k in ("condition", "num_samples", "annotation_f1", "annotation_em", "sft_file"):
+            self.assertIn(k, oracle)
+        self.assertEqual(oracle["num_samples"], 5)
+
+    def test_safe_name_helper(self):
+        self.assertEqual(_safe_name("Single Oracle"), "single_oracle")
+        self.assertEqual(_safe_name("DataFlow (naive LLM)"), "dataflow__naive_llm")
+
+    def test_save_load_result_roundtrip(self):
+        result = {
+            "condition": "Single Oracle",
+            "num_samples": 10,
+            "annotation_f1": 0.6,
+            "annotation_em": 0.4,
+            "downstream_bleu": None,
+            "downstream_rouge_l": None,
+            "sft_file": "/tmp/foo.jsonl",
+        }
+        _save_condition_result(result, self.tmp_dir)
+        self.assertTrue(_condition_already_done("Single Oracle", self.tmp_dir))
+        loaded = _load_condition_result("Single Oracle", self.tmp_dir)
+        self.assertEqual(loaded["condition"], result["condition"])
+        self.assertAlmostEqual(loaded["annotation_f1"], result["annotation_f1"])
 
 
 if __name__ == "__main__":

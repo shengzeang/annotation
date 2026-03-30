@@ -203,6 +203,51 @@ def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str
 
 
 # ---------------------------------------------------------------------------
+# Resume-mechanism helpers
+# ---------------------------------------------------------------------------
+
+def _safe_name(cond_name: str) -> str:
+    """Convert a condition name to a filesystem-safe lowercase string."""
+    return re.sub(r"[() /\-]", "_", cond_name.lower()).strip("_")
+
+
+def _condition_result_path(cond_name: str, output_dir: str) -> str:
+    """Return the path to the per-condition result JSON file."""
+    return os.path.join(output_dir, f"result_{_safe_name(cond_name)}.json")
+
+
+def _sft_output_path(cond_name: str, output_dir: str) -> str:
+    """Return the path to the per-condition SFT JSONL output file."""
+    return os.path.join(output_dir, f"sft_al_{_safe_name(cond_name)}.jsonl")
+
+
+def _condition_already_done(cond_name: str, output_dir: str) -> bool:
+    """Return ``True`` if *cond_name* has already produced output in *output_dir*.
+
+    A condition is considered done if **either** the per-condition result JSON
+    file **or** the SFT JSONL output file already exists on disk.
+    """
+    return (
+        os.path.exists(_condition_result_path(cond_name, output_dir))
+        or os.path.exists(_sft_output_path(cond_name, output_dir))
+    )
+
+
+def _load_condition_result(cond_name: str, output_dir: str) -> Dict[str, Any]:
+    """Load and return the cached per-condition result dict from disk."""
+    with open(_condition_result_path(cond_name, output_dir), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _save_condition_result(result: Dict[str, Any], output_dir: str) -> None:
+    """Persist a per-condition result dict to *output_dir*."""
+    path = _condition_result_path(result["condition"], output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # Experiment runner
 # ---------------------------------------------------------------------------
 
@@ -266,40 +311,66 @@ def run_experiment(
         candidate_llms = ["primary"]
         llm_dict = {"primary": cheap_llm}
 
-    # Build conditions — each returns a filtered list
+    # Build conditions lazily — each entry is a (name, fn) pair where fn
+    # selects the samples.  Expensive filters are only executed if the
+    # condition has not been completed in a previous run.
     rng = random.Random(seed)
     shuffled = dataset[:]
     rng.shuffle(shuffled)
     random_subset = shuffled[:budget]
 
-    al_filter = ActiveLearningFilter(
-        method="alps",
-        budget=budget,
-        batch_size=max(2, budget // 5),
-        force_fallback=force_fallback,
-    )
-    al_filtered = al_filter.filter(dataset)
+    def _alps_filtered() -> List[Dict[str, Any]]:
+        al_filter = ActiveLearningFilter(
+            method="alps",
+            budget=budget,
+            batch_size=max(2, budget // 5),
+            force_fallback=force_fallback,
+        )
+        return al_filter.filter(dataset)
 
-    al_filter_full = ActiveLearningFilter(
-        method="alps",
-        budget=max(budget * 2, len(dataset)),
-        batch_size=max(2, budget // 5),
-        force_fallback=force_fallback,
-    )
-    llm_naive_filter = LLMNaiveFilter(cheap_llm, budget=budget)
-    al_then_llm = llm_naive_filter.filter(al_filter_full.filter(dataset))
+    def _al_then_llm() -> List[Dict[str, Any]]:
+        al_filter_full = ActiveLearningFilter(
+            method="alps",
+            budget=max(budget * 2, len(dataset)),
+            batch_size=max(2, budget // 5),
+            force_fallback=force_fallback,
+        )
+        llm_naive_filter = LLMNaiveFilter(cheap_llm, budget=budget)
+        return llm_naive_filter.filter(al_filter_full.filter(dataset))
 
-    conditions = [
-        ("No filter",         dataset[:budget]),
-        ("Random sampling",   random_subset),
-        ("ALPS filter",       al_filtered),
-        ("Full filter chain", al_then_llm),
+    _N = 4
+    conditions: List[tuple] = [
+        ("No filter",         lambda: dataset[:budget]),
+        ("Random sampling",   lambda: random_subset),
+        ("ALPS filter",       _alps_filtered),
+        ("Full filter chain", _al_then_llm),
     ]
 
     results: List[Dict[str, Any]] = []
-    n_cond = len(conditions)
-    for i, (cond_name, selected) in enumerate(conditions, 1):
-        print(f"\n[{i}/{n_cond}] Running condition: {cond_name}  ({len(selected)} samples) …")
+    for i, (cond_name, get_selected) in enumerate(conditions, 1):
+        print(f"\n[{i}/{_N}] Running condition: {cond_name} …")
+        if _condition_already_done(cond_name, output_dir):
+            print(f"  ↳ Already done — skipping (output file exists).")
+            result_path = _condition_result_path(cond_name, output_dir)
+            if os.path.exists(result_path):
+                results.append(_load_condition_result(cond_name, output_dir))
+            else:
+                # SFT file exists but result JSON was not written — reconstruct minimal result.
+                sft_path = _sft_output_path(cond_name, output_dir)
+                n_lines = sum(1 for _ in open(sft_path, encoding="utf-8"))
+                results.append({
+                    "condition": cond_name,
+                    "selected": 0,
+                    "annotated": n_lines,
+                    "annotation_f1": 0.0,
+                    "annotation_em": 0.0,
+                    "human_review": 0,
+                    "sft_file": sft_path,
+                })
+            continue
+
+        selected = get_selected()
+        print(f"  {len(selected)} samples selected.")
         # Build fresh annotator per condition (fresh KB to avoid cross-contamination)
         kb_path = os.path.join(output_dir, f"kb_{re.sub(r'[^a-z0-9]', '_', cond_name.lower())}.json")
         annotator = Annotator(
@@ -319,11 +390,10 @@ def run_experiment(
         annotated = annotator.annotate_batch(routed)
 
         quality = evaluate_annotation_quality(annotated)
-        safe_name = re.sub(r"[() /\-]", "_", cond_name.lower()).strip("_")
-        sft_path = os.path.join(output_dir, f"sft_al_{safe_name}.jsonl")
+        sft_path = _sft_output_path(cond_name, output_dir)
         n_written = write_sft_jsonl(annotated, sft_path)
 
-        results.append({
+        result: Dict[str, Any] = {
             "condition": cond_name,
             "selected": len(selected),
             "annotated": n_written,
@@ -331,7 +401,9 @@ def run_experiment(
             "annotation_em": quality["annotation_em"],
             "human_review": sum(1 for r in annotated if r.get("needs_human", False)),
             "sft_file": sft_path,
-        })
+        }
+        _save_condition_result(result, output_dir)
+        results.append(result)
 
     return results
 

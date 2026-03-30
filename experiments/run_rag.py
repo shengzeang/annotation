@@ -206,6 +206,51 @@ def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str
 
 
 # ---------------------------------------------------------------------------
+# Resume-mechanism helpers
+# ---------------------------------------------------------------------------
+
+def _safe_name(cond_name: str) -> str:
+    """Convert a condition name to a filesystem-safe lowercase string."""
+    return re.sub(r"[^a-z0-9]", "_", cond_name.lower())
+
+
+def _condition_result_path(cond_name: str, output_dir: str) -> str:
+    """Return the path to the per-condition result JSON file."""
+    return os.path.join(output_dir, f"result_{_safe_name(cond_name)}.json")
+
+
+def _sft_output_path(cond_name: str, output_dir: str) -> str:
+    """Return the path to the per-condition SFT JSONL output file."""
+    return os.path.join(output_dir, f"sft_rag_{_safe_name(cond_name)}.jsonl")
+
+
+def _condition_already_done(cond_name: str, output_dir: str) -> bool:
+    """Return ``True`` if *cond_name* has already produced output in *output_dir*.
+
+    A condition is considered done if **either** the per-condition result JSON
+    file **or** the SFT JSONL output file already exists on disk.
+    """
+    return (
+        os.path.exists(_condition_result_path(cond_name, output_dir))
+        or os.path.exists(_sft_output_path(cond_name, output_dir))
+    )
+
+
+def _load_condition_result(cond_name: str, output_dir: str) -> Dict[str, Any]:
+    """Load and return the cached per-condition result dict from disk."""
+    with open(_condition_result_path(cond_name, output_dir), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _save_condition_result(result: Dict[str, Any], output_dir: str) -> None:
+    """Persist a per-condition result dict to *output_dir*."""
+    path = _condition_result_path(result["condition"], output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # Experiment runner
 # ---------------------------------------------------------------------------
 
@@ -269,31 +314,56 @@ def run_experiment(
         candidate_llms = ["primary"]
         llm_dict = {"primary": llm}
 
-    # Shared filter — same for both conditions
-    al_filter = ActiveLearningFilter(
-        method="alps",
-        budget=len(dataset),
-        batch_size=max(2, len(dataset) // 10),
-        force_fallback=force_fallback,
-    )
-    filtered = al_filter.filter(dataset)
-
-    router = CascadeRouter(
-        judge_llm=judge_llm,
-        candidate_llm=candidate_llms,
-        llm_dict=llm_dict,
-    )
-    routed = router.route(filtered)
-
+    _N = 2
     conditions = [
         ("No RAG", False),
         ("RAG",    True),
     ]
 
-    results = []
-    n_cond = len(conditions)
+    # Only compute shared routing when at least one condition still needs to run.
+    _needs_run = [not _condition_already_done(cn, output_dir) for cn, _ in conditions]
+    if any(_needs_run):
+        # Shared filter — same for both conditions
+        al_filter = ActiveLearningFilter(
+            method="alps",
+            budget=len(dataset),
+            batch_size=max(2, len(dataset) // 10),
+            force_fallback=force_fallback,
+        )
+        filtered = al_filter.filter(dataset)
+
+        router = CascadeRouter(
+            judge_llm=judge_llm,
+            candidate_llm=candidate_llms,
+            llm_dict=llm_dict,
+        )
+        routed = router.route(filtered)
+    else:
+        routed = []  # unused — all conditions will be loaded from cache
+
+    results: List[Dict[str, Any]] = []
     for i, (cond_name, use_rag) in enumerate(conditions, 1):
-        print(f"\n[{i}/{n_cond}] Running condition: {cond_name} …")
+        print(f"\n[{i}/{_N}] Running condition: {cond_name} …")
+        if _condition_already_done(cond_name, output_dir):
+            print(f"  ↳ Already done — skipping (output file exists).")
+            result_path = _condition_result_path(cond_name, output_dir)
+            if os.path.exists(result_path):
+                results.append(_load_condition_result(cond_name, output_dir))
+            else:
+                # SFT file exists but result JSON was not written — reconstruct minimal result.
+                sft_path = _sft_output_path(cond_name, output_dir)
+                n_lines = sum(1 for _ in open(sft_path, encoding="utf-8"))
+                results.append({
+                    "condition": cond_name,
+                    "annotated": n_lines,
+                    "annotation_f1": 0.0,
+                    "annotation_em": 0.0,
+                    "final_kb_size": 0,
+                    "windowed_f1": [],
+                    "sft_file": sft_path,
+                })
+            continue
+
         kb_path = os.path.join(output_dir, f"kb_{re.sub(r'[^a-z0-9]', '_', cond_name.lower())}.json")
         annotator = Annotator(
             candidate_llms,
@@ -301,7 +371,6 @@ def run_experiment(
             task=task,
             rag=use_rag,
             kb_path=kb_path,
-            # Pass topk via annotator's knowledge_base config
         )
         # For RAG condition, set the retrieve topk
         if use_rag:
@@ -313,11 +382,10 @@ def run_experiment(
         w_f1 = windowed_f1(annotated, window=window)
         final_kb_size = len(annotator.knowledge_base.entries) if use_rag else 0
 
-        safe_name = re.sub(r"[^a-z0-9]", "_", cond_name.lower())
-        sft_path = os.path.join(output_dir, f"sft_rag_{safe_name}.jsonl")
+        sft_path = _sft_output_path(cond_name, output_dir)
         n_written = write_sft_jsonl(annotated, sft_path)
 
-        results.append({
+        result: Dict[str, Any] = {
             "condition": cond_name,
             "annotated": n_written,
             "annotation_f1": quality["annotation_f1"],
@@ -325,7 +393,9 @@ def run_experiment(
             "final_kb_size": final_kb_size,
             "windowed_f1": w_f1,
             "sft_file": sft_path,
-        })
+        }
+        _save_condition_result(result, output_dir)
+        results.append(result)
 
     return results
 

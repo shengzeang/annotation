@@ -226,6 +226,51 @@ def run_downstream_finetune(
 
 
 # ---------------------------------------------------------------------------
+# Resume-mechanism helpers
+# ---------------------------------------------------------------------------
+
+def _safe_name(cond_name: str) -> str:
+    """Convert a condition name to a filesystem-safe lowercase string."""
+    return re.sub(r"[() /\-]", "_", cond_name.lower()).strip("_")
+
+
+def _condition_result_path(cond_name: str, output_dir: str) -> str:
+    """Return the path to the per-condition result JSON file."""
+    return os.path.join(output_dir, f"result_{_safe_name(cond_name)}.json")
+
+
+def _sft_output_path(cond_name: str, output_dir: str) -> str:
+    """Return the path to the per-condition SFT JSONL output file."""
+    return os.path.join(output_dir, f"sft_lsc_{_safe_name(cond_name)}.jsonl")
+
+
+def _condition_already_done(cond_name: str, output_dir: str) -> bool:
+    """Return ``True`` if *cond_name* has already produced output in *output_dir*.
+
+    A condition is considered done if **either** the per-condition result JSON
+    file **or** the SFT JSONL output file already exists on disk.
+    """
+    return (
+        os.path.exists(_condition_result_path(cond_name, output_dir))
+        or os.path.exists(_sft_output_path(cond_name, output_dir))
+    )
+
+
+def _load_condition_result(cond_name: str, output_dir: str) -> Dict[str, Any]:
+    """Load and return the cached per-condition result dict from disk."""
+    with open(_condition_result_path(cond_name, output_dir), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _save_condition_result(result: Dict[str, Any], output_dir: str) -> None:
+    """Persist a per-condition result dict to *output_dir*."""
+    path = _condition_result_path(result["condition"], output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # Experiment runner
 # ---------------------------------------------------------------------------
 
@@ -307,22 +352,31 @@ def run_experiment(
     oracle_name = candidate_llms[-1]  # most capable model
 
     # ------------------------------------------------------------------ #
-    # Shared filter + router for DataFlow conditions                      #
+    # Lazy shared routing — computed only when needed by a DataFlow cond  #
     # ------------------------------------------------------------------ #
-    al_filter = ActiveLearningFilter(
-        method="alps",
-        budget=len(dataset),
-        batch_size=max(2, len(dataset) // 10),
-        force_fallback=force_fallback,
+    _dataflow_cond_names = (
+        "DataFlow (naive LLM)",
+        "DataFlow (KB + RAG)",
+        "DataFlow (full pipeline)",
     )
-    filtered = al_filter.filter(dataset)
+    _routed_cache: List[Any] = []  # populated on first DataFlow call
 
-    router = CascadeRouter(
-        judge_llm=judge_llm,
-        candidate_llm=candidate_llms,
-        llm_dict=llm_dict,
-    )
-    routed = router.route(filtered)
+    def _get_routed() -> List[Dict[str, Any]]:
+        if not _routed_cache:
+            al_filter = ActiveLearningFilter(
+                method="alps",
+                budget=len(dataset),
+                batch_size=max(2, len(dataset) // 10),
+                force_fallback=force_fallback,
+            )
+            filtered = al_filter.filter(dataset)
+            router = CascadeRouter(
+                judge_llm=judge_llm,
+                candidate_llm=candidate_llms,
+                llm_dict=llm_dict,
+            )
+            _routed_cache.append(router.route(filtered))
+        return _routed_cache[0]
 
     # ------------------------------------------------------------------ #
     # Helper: annotate with majority vote across N independent runs       #
@@ -349,61 +403,76 @@ def run_experiment(
         return final
 
     # ------------------------------------------------------------------ #
-    # Define conditions                                                   #
+    # Define conditions as (name, fn) pairs — fn is only called if needed #
     # ------------------------------------------------------------------ #
     _N = 5
 
-    print(f"\n[1/{_N}] Running condition: Single Oracle …")
-    _data_single_oracle = _oracle_annotate(1, "single_oracle")
+    def _annotate_dataflow_naive() -> List[Dict[str, Any]]:
+        annotator = Annotator(
+            candidate_llms, llm_dict, task=task, rag=False,
+            kb_path=os.path.join(output_dir, "kb_dataflow_naive.json"),
+        )
+        return annotator.annotate_batch(_get_routed())
 
-    print(f"\n[2/{_N}] Running condition: 3-Oracle Majority Vote …")
-    _data_three_oracle = _oracle_annotate(3, "three_oracle")
+    def _annotate_dataflow_rag() -> List[Dict[str, Any]]:
+        annotator = Annotator(
+            candidate_llms, llm_dict, task=task, rag=True,
+            kb_path=os.path.join(output_dir, "kb_dataflow_rag.json"),
+        )
+        return annotator.annotate_batch(_get_routed())
 
-    print(f"\n[3/{_N}] Running condition: DataFlow (naive LLM) …")
-    _annotator_naive = Annotator(
-        candidate_llms, llm_dict, task=task, rag=False,
-        kb_path=os.path.join(output_dir, "kb_dataflow_naive.json"),
-    )
-    _data_naive = _annotator_naive.annotate_batch(routed)
+    def _annotate_dataflow_full() -> List[Dict[str, Any]]:
+        annotator = Annotator(
+            candidate_llms, llm_dict, task=task, rag=True,
+            confidence_threshold=0.75,
+            kb_path=os.path.join(output_dir, "kb_dataflow_full.json"),
+        )
+        return annotator.annotate_batch(_get_routed())
 
-    print(f"\n[4/{_N}] Running condition: DataFlow (KB + RAG) …")
-    _annotator_rag = Annotator(
-        candidate_llms, llm_dict, task=task, rag=True,
-        kb_path=os.path.join(output_dir, "kb_dataflow_rag.json"),
-    )
-    _data_rag = _annotator_rag.annotate_batch(routed)
-
-    print(f"\n[5/{_N}] Running condition: DataFlow (full pipeline) …")
-    _annotator_full = Annotator(
-        candidate_llms, llm_dict, task=task, rag=True,
-        confidence_threshold=0.75,
-        kb_path=os.path.join(output_dir, "kb_dataflow_full.json"),
-    )
-    _data_full = _annotator_full.annotate_batch(routed)
-
-    conditions_data = [
-        ("Single Oracle",          _data_single_oracle),
-        ("3-Oracle Majority Vote", _data_three_oracle),
-        ("DataFlow (naive LLM)",   _data_naive),
-        ("DataFlow (KB + RAG)",    _data_rag),
-        ("DataFlow (full pipeline)", _data_full),
+    conditions: List[tuple] = [
+        ("Single Oracle",            lambda: _oracle_annotate(1, "single_oracle")),
+        ("3-Oracle Majority Vote",   lambda: _oracle_annotate(3, "three_oracle")),
+        ("DataFlow (naive LLM)",     _annotate_dataflow_naive),
+        ("DataFlow (KB + RAG)",      _annotate_dataflow_rag),
+        ("DataFlow (full pipeline)", _annotate_dataflow_full),
     ]
 
     # ------------------------------------------------------------------ #
     # Evaluate and collect results                                        #
     # ------------------------------------------------------------------ #
     results: List[Dict[str, Any]] = []
-    for cond_name, annotated in conditions_data:
+    for i, (cond_name, fn) in enumerate(conditions, 1):
+        print(f"\n[{i}/{_N}] Running condition: {cond_name} …")
+        if _condition_already_done(cond_name, output_dir):
+            print(f"  ↳ Already done — skipping (output file exists).")
+            result_path = _condition_result_path(cond_name, output_dir)
+            if os.path.exists(result_path):
+                results.append(_load_condition_result(cond_name, output_dir))
+            else:
+                # SFT file exists but result JSON was not written — reconstruct minimal result.
+                sft_path = _sft_output_path(cond_name, output_dir)
+                n_lines = sum(1 for _ in open(sft_path, encoding="utf-8"))
+                results.append({
+                    "condition": cond_name,
+                    "num_samples": n_lines,
+                    "annotation_f1": 0.0,
+                    "annotation_em": 0.0,
+                    "downstream_bleu": None,
+                    "downstream_rouge_l": None,
+                    "sft_file": sft_path,
+                })
+            continue
+
+        annotated = fn()
         quality = evaluate_annotation_quality(annotated)
 
-        safe_name = re.sub(r"[() /\-]", "_", cond_name.lower()).strip("_")
-        sft_path = os.path.join(output_dir, f"sft_lsc_{safe_name}.jsonl")
+        sft_path = _sft_output_path(cond_name, output_dir)
         n_written = write_sft_jsonl(annotated, sft_path)
 
         downstream_bleu: Optional[float] = None
         downstream_rouge_l: Optional[float] = None
         if not skip_finetune:
-            model_dir = os.path.join(output_dir, f"qwen_sft_{safe_name}")
+            model_dir = os.path.join(output_dir, f"qwen_sft_{_safe_name(cond_name)}")
             ft_result = run_downstream_finetune(
                 sft_path=sft_path,
                 model_name=finetune_model_name,
@@ -413,7 +482,7 @@ def run_experiment(
             downstream_bleu = ft_result.get("bleu")
             downstream_rouge_l = ft_result.get("rouge_l")
 
-        results.append({
+        result: Dict[str, Any] = {
             "condition": cond_name,
             "num_samples": n_written,
             "annotation_f1": quality["annotation_f1"],
@@ -421,7 +490,9 @@ def run_experiment(
             "downstream_bleu": downstream_bleu,
             "downstream_rouge_l": downstream_rouge_l,
             "sft_file": sft_path,
-        })
+        }
+        _save_condition_result(result, output_dir)
+        results.append(result)
 
     return results
 

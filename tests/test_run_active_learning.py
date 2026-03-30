@@ -25,6 +25,12 @@ from experiments.run_active_learning import (
     run_experiment,
     write_sft_jsonl,
     _make_synthetic_dataset,
+    _safe_name,
+    _condition_result_path,
+    _sft_output_path,
+    _condition_already_done,
+    _load_condition_result,
+    _save_condition_result,
 )
 
 
@@ -329,6 +335,100 @@ class TestConditionProgressBanners(unittest.TestCase):
         # Each banner should include the sample count
         # "No filter" uses budget samples directly
         self.assertIn("samples", out)
+
+
+# ---------------------------------------------------------------------------
+# Resume mechanism (_condition_already_done / helpers / skip on second run)
+# ---------------------------------------------------------------------------
+
+class TestResumeMechanismAL(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.dataset = _make_dataset(n=12)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _run(self, budget: int = 6):
+        return run_experiment(
+            dataset=self.dataset,
+            cheap_llm=MockLLM(),
+            judge_llm=MockJudgeLLM(),
+            budget=budget,
+            output_dir=self.tmp_dir,
+            seed=0,
+            force_fallback=True,
+        )
+
+    def test_not_done_initially(self):
+        for cond in ("No filter", "Random sampling", "ALPS filter", "Full filter chain"):
+            self.assertFalse(_condition_already_done(cond, self.tmp_dir))
+
+    def test_all_conditions_done_after_run(self):
+        self._run()
+        for cond in ("No filter", "Random sampling", "ALPS filter", "Full filter chain"):
+            self.assertTrue(
+                _condition_already_done(cond, self.tmp_dir),
+                f"Expected cached output for '{cond}' after run",
+            )
+
+    def test_second_run_skips_all_conditions(self):
+        import io, contextlib
+        self._run()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self._run()
+        self.assertIn("Already done", buf.getvalue())
+
+    def test_second_run_returns_same_results(self):
+        r1 = self._run()
+        r2 = self._run()
+        self.assertEqual(len(r1), len(r2))
+        for a, b in zip(r1, r2):
+            self.assertEqual(a["condition"], b["condition"])
+            self.assertAlmostEqual(a["annotation_f1"], b["annotation_f1"])
+
+    def test_sft_file_alone_triggers_done(self):
+        cond = "No filter"
+        sft_path = _sft_output_path(cond, self.tmp_dir)
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        with open(sft_path, "w") as f:
+            f.write('{"instruction": "Q", "output": "A"}\n')
+        self.assertTrue(_condition_already_done(cond, self.tmp_dir))
+
+    def test_sft_file_only_run_returns_result(self):
+        cond = "No filter"
+        sft_path = _sft_output_path(cond, self.tmp_dir)
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        with open(sft_path, "w") as f:
+            for i in range(4):
+                f.write(f'{{"instruction": "Q{i}", "output": "A{i}"}}\n')
+        results = self._run()
+        no_filter = next(r for r in results if r["condition"] == cond)
+        for k in ("condition", "annotated", "annotation_f1", "annotation_em", "sft_file"):
+            self.assertIn(k, no_filter)
+        self.assertEqual(no_filter["annotated"], 4)
+
+    def test_safe_name_helper(self):
+        self.assertEqual(_safe_name("No filter"), "no_filter")
+        self.assertEqual(_safe_name("Full filter chain"), "full_filter_chain")
+
+    def test_save_load_result_roundtrip(self):
+        result = {
+            "condition": "No filter",
+            "selected": 6,
+            "annotated": 6,
+            "annotation_f1": 0.5,
+            "annotation_em": 0.3,
+            "human_review": 0,
+            "sft_file": "/tmp/foo.jsonl",
+        }
+        _save_condition_result(result, self.tmp_dir)
+        self.assertTrue(_condition_already_done("No filter", self.tmp_dir))
+        loaded = _load_condition_result("No filter", self.tmp_dir)
+        self.assertEqual(loaded["condition"], result["condition"])
+        self.assertAlmostEqual(loaded["annotation_f1"], result["annotation_f1"])
 
 
 if __name__ == "__main__":
