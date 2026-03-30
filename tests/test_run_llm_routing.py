@@ -31,6 +31,7 @@ from experiments.run_llm_routing import (
     _safe_name,
     _condition_already_done,
     _condition_result_path,
+    _sft_output_path,
     _save_condition_result,
     _load_condition_result,
     _route_direct,
@@ -247,10 +248,6 @@ class TestPrintResultsTable(unittest.TestCase):
         self.assertIn("CascadeRouter", buf.getvalue())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # ---------------------------------------------------------------------------
 # Progress banner tests — verify condition banners are printed to stdout
 # ---------------------------------------------------------------------------
@@ -309,6 +306,17 @@ class TestSafeName(unittest.TestCase):
 
     def test_slash_replaced(self):
         self.assertEqual(_safe_name("LLM/Router"), "llm_router")
+
+
+class TestSftOutputPath(unittest.TestCase):
+    def test_path_uses_safe_name(self):
+        path = _sft_output_path("All-cheap", "/tmp/out")
+        self.assertTrue(path.endswith("sft_routing_all_cheap.jsonl"))
+        self.assertIn("/tmp/out", path)
+
+    def test_path_knn_router(self):
+        path = _sft_output_path("KNNRouter", "/tmp/out")
+        self.assertTrue(path.endswith("sft_routing_knnrouter.jsonl"))
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +463,36 @@ class TestResumeMechanism(unittest.TestCase):
         loaded = _load_condition_result("All-cheap", self.tmp_dir)
         self.assertEqual(loaded["condition"], result["condition"])
         self.assertAlmostEqual(loaded["annotation_f1"], result["annotation_f1"])
+
+    def test_sft_file_alone_triggers_done(self):
+        """_condition_already_done should return True when only the SFT file exists."""
+        cond = "All-cheap"
+        sft_path = _sft_output_path(cond, self.tmp_dir)
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        with open(sft_path, "w") as f:
+            f.write('{"instruction": "Q", "output": "A"}\n')
+        self.assertTrue(
+            _condition_already_done(cond, self.tmp_dir),
+            "Expected _condition_already_done=True when SFT file exists",
+        )
+
+    def test_sft_file_only_run_skips_and_returns_result(self):
+        """If only the SFT file exists (no result JSON), run_experiment must still skip
+        the condition and return a result dict with required keys."""
+        cond = "All-cheap"
+        sft_path = _sft_output_path(cond, self.tmp_dir)
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        # Write 3 fake JSONL lines
+        with open(sft_path, "w") as f:
+            for i in range(3):
+                f.write(f'{{"instruction": "Q{i}", "output": "A{i}"}}\n')
+        # No result JSON for All-cheap — only SFT file
+        results = self._run()
+        cheap = next(r for r in results if r["condition"] == cond)
+        for k in ("condition", "annotated", "annotation_f1",
+                  "annotation_em", "expensive_call_rate", "sft_file"):
+            self.assertIn(k, cheap, f"Key '{k}' missing when loaded from SFT file")
+        self.assertEqual(cheap["annotated"], 3)
 
 
 # ---------------------------------------------------------------------------

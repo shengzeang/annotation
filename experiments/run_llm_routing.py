@@ -168,9 +168,24 @@ def _condition_result_path(cond_name: str, output_dir: str) -> str:
     return os.path.join(output_dir, f"result_{_safe_name(cond_name)}.json")
 
 
+def _sft_output_path(cond_name: str, output_dir: str) -> str:
+    """Return the path to the per-condition SFT JSONL output file."""
+    return os.path.join(output_dir, f"sft_routing_{_safe_name(cond_name)}.jsonl")
+
+
 def _condition_already_done(cond_name: str, output_dir: str) -> bool:
-    """Return ``True`` if *cond_name* has a cached result file in *output_dir*."""
-    return os.path.exists(_condition_result_path(cond_name, output_dir))
+    """Return ``True`` if *cond_name* has already produced output in *output_dir*.
+
+    The check is intentionally broad: a condition is considered done if
+    **either** the per-condition result JSON file **or** the SFT JSONL output
+    file already exists on disk.  This lets the resume mechanism work even
+    when only the primary output (SFT file) was written in a previous partial
+    run.
+    """
+    return (
+        os.path.exists(_condition_result_path(cond_name, output_dir))
+        or os.path.exists(_sft_output_path(cond_name, output_dir))
+    )
 
 
 def _load_condition_result(cond_name: str, output_dir: str) -> Dict[str, Any]:
@@ -514,8 +529,23 @@ def run_experiment(
     for i, (cond_name, fn) in enumerate(conditions, 1):
         print(f"\n[{i}/{_N}] Running condition: {cond_name} …")
         if _condition_already_done(cond_name, output_dir):
-            print(f"  ↳ Already done — loading cached result.")
-            results.append(_load_condition_result(cond_name, output_dir))
+            print(f"  ↳ Already done — skipping (output file exists).")
+            result_path = _condition_result_path(cond_name, output_dir)
+            if os.path.exists(result_path):
+                results.append(_load_condition_result(cond_name, output_dir))
+            else:
+                # SFT output file exists but result JSON was never written — reconstruct
+                # a minimal result so the summary table can still be printed.
+                sft_path = _sft_output_path(cond_name, output_dir)
+                n_lines = sum(1 for _ in open(sft_path, encoding="utf-8"))
+                results.append({
+                    "condition": cond_name,
+                    "annotated": n_lines,
+                    "annotation_f1": 0.0,
+                    "annotation_em": 0.0,
+                    "expensive_call_rate": 0.0,
+                    "sft_file": sft_path,
+                })
             continue
         annotated = fn()
         quality = evaluate_annotation_quality(annotated, expensive_llm_name=expensive_name)
