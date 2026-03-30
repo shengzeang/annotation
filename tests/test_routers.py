@@ -167,6 +167,21 @@ class TestLLMRouter(unittest.TestCase):
             self.assertIn("model", s)
             self.assertIn("score", s)
 
+    def test_score_fallback_when_scorer_raises(self):
+        """If scorer.generate() raises an exception, score() must fall back to
+        heuristic scoring instead of propagating the exception."""
+        from routers.llm_router import LLMRouter
+        scorer = MagicMock()
+        scorer.generate.side_effect = RuntimeError("CUDA out of memory")
+        router = LLMRouter(scorer, candidate_llms=["model-a", "model-b"])
+        # Must not raise; must return a valid list of scored candidates
+        scores = router.score("some sample text", ["model-a", "model-b"])
+        self.assertEqual(len(scores), 2)
+        for s in scores:
+            self.assertIn("model", s)
+            self.assertIn("score", s)
+            self.assertIsInstance(s["score"], float)
+
     def test_score_fallback_returns_sorted_desc(self):
         router, _ = self._make_router("invalid json")
         scores = router.score("model-a model-b", ["model-a", "model-b"])

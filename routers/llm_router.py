@@ -39,13 +39,13 @@ class LLMRouter(BaseRouter):
         return prompt
 
     def score(self, sample_text: str, candidate_llms: List[str], max_new_tokens: int = 80) -> List[Dict[str, Any]]:
-        prompt = self._build_prompt(sample_text, candidate_llms)
-        raw = self.scorer.generate(prompt, max_new_tokens=max_new_tokens)
         # Try to parse JSON out of the raw response robustly
         import json
-        out = raw.strip()
-        # Heuristic: find the first '[' and last ']' to extract JSON array
         try:
+            prompt = self._build_prompt(sample_text, candidate_llms)
+            raw = self.scorer.generate(prompt, max_new_tokens=max_new_tokens)
+            out = raw.strip()
+            # Heuristic: find the first '[' and last ']' to extract JSON array
             start = out.index('[')
             end = out.rindex(']')
             json_text = out[start:end+1]
