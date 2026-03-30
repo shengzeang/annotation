@@ -38,7 +38,15 @@ class LLMRouter(BaseRouter):
         )
         return prompt
 
-    def score(self, sample_text: str, candidate_llms: List[str], max_new_tokens: int = 80) -> List[Dict[str, Any]]:
+    def score(self, sample_text: str, candidate_llms: List[str], max_new_tokens: int = 200) -> List[Dict[str, Any]]:
+        """Score each candidate LLM for the given sample using the scorer LLM.
+
+        ``max_new_tokens`` defaults to 200 to provide sufficient room for three
+        full model names (e.g. ``Qwen/Qwen2.5-14B-Instruct``) plus JSON
+        punctuation in the output.  Falls back to a name-overlap heuristic
+        whenever the scorer LLM raises an exception, returns invalid JSON, or
+        returns an empty JSON array.
+        """
         # Try to parse JSON out of the raw response robustly
         import json
         try:
@@ -50,6 +58,8 @@ class LLMRouter(BaseRouter):
             end = out.rindex(']')
             json_text = out[start:end+1]
             parsed = json.loads(json_text)
+            if not parsed:
+                raise ValueError("scorer returned empty candidate list")
             # Normalize scores
             for item in parsed:
                 if 'score' in item:
