@@ -18,6 +18,9 @@ from experiments.run_llm_routing import (
     MockAnnotationLLM,
     MockJudgeLLM,
     MockScorerLLM,
+    MockKNNRouter,
+    MockGraphRouter,
+    MockMLPRouter,
     compute_exact_match,
     compute_token_f1,
     evaluate_annotation_quality,
@@ -25,6 +28,12 @@ from experiments.run_llm_routing import (
     run_experiment,
     write_sft_jsonl,
     _make_synthetic_dataset,
+    _safe_name,
+    _condition_already_done,
+    _condition_result_path,
+    _save_condition_result,
+    _load_condition_result,
+    _route_direct,
 )
 
 
@@ -161,17 +170,18 @@ class TestRunExperiment(unittest.TestCase):
             force_fallback=True,
         )
 
-    def test_returns_four_conditions(self):
+    def test_returns_seven_conditions(self):
         results = self._run()
-        self.assertEqual(len(results), 4)
+        self.assertEqual(len(results), 7)
 
     def test_condition_names(self):
         results = self._run()
         names = {r["condition"] for r in results}
-        self.assertIn("All-cheap", names)
-        self.assertIn("All-expensive", names)
-        self.assertIn("CascadeRouter", names)
-        self.assertIn("LLMRouter", names)
+        for expected in (
+            "All-cheap", "All-expensive", "CascadeRouter", "LLMRouter",
+            "KNNRouter", "GraphRouter", "MLPRouter",
+        ):
+            self.assertIn(expected, names)
 
     def test_required_keys(self):
         results = self._run()
@@ -271,15 +281,243 @@ class TestConditionProgressBanners(unittest.TestCase):
             )
         return buf.getvalue()
 
-    def test_all_four_banners_printed(self):
+    def test_all_seven_banners_printed(self):
         out = self._captured_output()
-        for name in ("All-cheap", "All-expensive", "CascadeRouter", "LLMRouter"):
+        for name in ("All-cheap", "All-expensive", "CascadeRouter", "LLMRouter",
+                     "KNNRouter", "GraphRouter", "MLPRouter"):
             self.assertIn(name, out, f"Banner for '{name}' not found in stdout")
 
     def test_banner_format_contains_fraction(self):
         out = self._captured_output()
-        self.assertIn("[1/4]", out)
-        self.assertIn("[4/4]", out)
+        self.assertIn("[1/7]", out)
+        self.assertIn("[7/7]", out)
+
+
+# ---------------------------------------------------------------------------
+# _safe_name helper
+# ---------------------------------------------------------------------------
+
+class TestSafeName(unittest.TestCase):
+    def test_hyphen_replaced(self):
+        self.assertEqual(_safe_name("All-cheap"), "all_cheap")
+
+    def test_spaces_replaced(self):
+        self.assertEqual(_safe_name("KNN Router"), "knn_router")
+
+    def test_already_safe(self):
+        self.assertEqual(_safe_name("knnrouter"), "knnrouter")
+
+    def test_slash_replaced(self):
+        self.assertEqual(_safe_name("LLM/Router"), "llm_router")
+
+
+# ---------------------------------------------------------------------------
+# Mock learning-based routers
+# ---------------------------------------------------------------------------
+
+class TestMockKNNRouter(unittest.TestCase):
+    def setUp(self):
+        self.router = MockKNNRouter(["cheap", "expensive"])
+
+    def test_score_returns_all_candidates(self):
+        scores = self.router.score("some text", ["cheap", "expensive"])
+        self.assertEqual(len(scores), 2)
+        models = {s["model"] for s in scores}
+        self.assertIn("cheap", models)
+        self.assertIn("expensive", models)
+
+    def test_score_all_have_score_key(self):
+        scores = self.router.score("text", ["cheap", "expensive"])
+        for s in scores:
+            self.assertIn("score", s)
+            self.assertIsInstance(s["score"], float)
+
+    def test_build_from_annotations_is_noop(self):
+        """Should not raise even when passed None."""
+        self.router.build_from_annotations(None)
+        self.router.build_from_annotations([], out_dir="/tmp")
+
+    def test_candidate_llms_stored(self):
+        self.assertEqual(self.router.candidate_llms, ["cheap", "expensive"])
+
+
+class TestMockGraphRouter(unittest.TestCase):
+    def test_inherits_mock_knn(self):
+        router = MockGraphRouter(["a", "b"])
+        scores = router.score("text", ["a", "b"])
+        self.assertEqual(len(scores), 2)
+
+
+class TestMockMLPRouter(unittest.TestCase):
+    def test_inherits_mock_knn(self):
+        router = MockMLPRouter(["a", "b", "c"])
+        scores = router.score("text", ["a", "b", "c"])
+        self.assertEqual(len(scores), 3)
+
+
+# ---------------------------------------------------------------------------
+# _route_direct helper
+# ---------------------------------------------------------------------------
+
+class TestRouteDirect(unittest.TestCase):
+    def _make_ds(self, n=5):
+        return [{"id": i, "text": f"q{i}", "answer": "ans"} for i in range(n)]
+
+    def test_adds_route_field(self):
+        router = MockKNNRouter(["cheap", "expensive"])
+        ds = self._make_ds(3)
+        result = _route_direct(router, ds)
+        for item in result:
+            self.assertIn("route", item)
+            self.assertIn("route_scores", item)
+
+    def test_preserves_original_fields(self):
+        router = MockKNNRouter(["cheap", "expensive"])
+        ds = self._make_ds(2)
+        result = _route_direct(router, ds)
+        for orig, routed in zip(ds, result):
+            self.assertEqual(orig["id"], routed["id"])
+            self.assertEqual(orig["text"], routed["text"])
+
+    def test_length_unchanged(self):
+        router = MockKNNRouter(["cheap", "expensive"])
+        ds = self._make_ds(7)
+        result = _route_direct(router, ds)
+        self.assertEqual(len(result), 7)
+
+
+# ---------------------------------------------------------------------------
+# Resume mechanism (_condition_already_done / _save/_load)
+# ---------------------------------------------------------------------------
+
+class TestResumeMechanism(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.dataset = _make_dataset(n=10)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _run(self):
+        return run_experiment(
+            dataset=self.dataset,
+            cheap_llm=MockAnnotationLLM(),
+            expensive_llm=MockAnnotationLLM(),
+            judge_llm=MockJudgeLLM(),
+            scorer_llm=MockScorerLLM(),
+            output_dir=self.tmp_dir,
+            force_fallback=True,
+        )
+
+    def test_not_done_initially(self):
+        for cond in ("All-cheap", "All-expensive", "CascadeRouter",
+                     "LLMRouter", "KNNRouter", "GraphRouter", "MLPRouter"):
+            self.assertFalse(_condition_already_done(cond, self.tmp_dir))
+
+    def test_all_conditions_done_after_run(self):
+        self._run()
+        for cond in ("All-cheap", "All-expensive", "CascadeRouter",
+                     "LLMRouter", "KNNRouter", "GraphRouter", "MLPRouter"):
+            self.assertTrue(
+                _condition_already_done(cond, self.tmp_dir),
+                f"Expected cached result for '{cond}' after run",
+            )
+
+    def test_second_run_returns_same_results(self):
+        """Second call should load all conditions from cache — same results."""
+        r1 = self._run()
+        r2 = self._run()
+        self.assertEqual(len(r1), len(r2))
+        for a, b in zip(r1, r2):
+            self.assertEqual(a["condition"], b["condition"])
+            self.assertAlmostEqual(a["annotation_f1"], b["annotation_f1"])
+
+    def test_second_run_prints_already_done_message(self):
+        import io, contextlib
+        self._run()  # first run
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self._run()  # second run — should skip everything
+        self.assertIn("Already done", buf.getvalue())
+
+    def test_save_and_load_result_roundtrip(self):
+        result = {
+            "condition": "All-cheap",
+            "annotated": 10,
+            "annotation_f1": 0.5,
+            "annotation_em": 0.3,
+            "expensive_call_rate": 0.0,
+            "sft_file": "/tmp/foo.jsonl",
+        }
+        _save_condition_result(result, self.tmp_dir)
+        self.assertTrue(_condition_already_done("All-cheap", self.tmp_dir))
+        loaded = _load_condition_result("All-cheap", self.tmp_dir)
+        self.assertEqual(loaded["condition"], result["condition"])
+        self.assertAlmostEqual(loaded["annotation_f1"], result["annotation_f1"])
+
+
+# ---------------------------------------------------------------------------
+# New routing conditions in the full run
+# ---------------------------------------------------------------------------
+
+class TestNewRoutingConditions(unittest.TestCase):
+    def setUp(self):
+        self.dataset = _make_dataset(n=12)
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _run(self):
+        return run_experiment(
+            dataset=self.dataset,
+            cheap_llm=MockAnnotationLLM(),
+            expensive_llm=MockAnnotationLLM(),
+            judge_llm=MockJudgeLLM(),
+            scorer_llm=MockScorerLLM(),
+            output_dir=self.tmp_dir,
+            force_fallback=True,
+        )
+
+    def test_knn_router_condition_present(self):
+        results = self._run()
+        names = [r["condition"] for r in results]
+        self.assertIn("KNNRouter", names)
+
+    def test_graph_router_condition_present(self):
+        results = self._run()
+        names = [r["condition"] for r in results]
+        self.assertIn("GraphRouter", names)
+
+    def test_mlp_router_condition_present(self):
+        results = self._run()
+        names = [r["condition"] for r in results]
+        self.assertIn("MLPRouter", names)
+
+    def test_new_conditions_have_required_keys(self):
+        results = self._run()
+        for r in results:
+            if r["condition"] in ("KNNRouter", "GraphRouter", "MLPRouter"):
+                for k in ("condition", "annotated", "annotation_f1",
+                          "annotation_em", "expensive_call_rate", "sft_file"):
+                    self.assertIn(k, r, f"Key '{k}' missing from {r['condition']} result")
+
+    def test_new_conditions_create_sft_files(self):
+        results = self._run()
+        for r in results:
+            if r["condition"] in ("KNNRouter", "GraphRouter", "MLPRouter"):
+                self.assertTrue(
+                    os.path.exists(r["sft_file"]),
+                    f"SFT file not created for {r['condition']}",
+                )
+
+    def test_new_conditions_create_result_json(self):
+        self._run()
+        for cond in ("KNNRouter", "GraphRouter", "MLPRouter"):
+            path = _condition_result_path(cond, self.tmp_dir)
+            self.assertTrue(os.path.exists(path), f"Result JSON missing for {cond}")
 
 
 if __name__ == "__main__":

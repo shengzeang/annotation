@@ -6,10 +6,10 @@ annotation quality against cost, following the same pipeline pattern from
 
     filter → router.route() → annotator.annotate_batch()
 
-Four routing conditions are compared using the same ``ActiveLearningFilter``
+Seven routing conditions are compared using the same ``ActiveLearningFilter``
 + ``Annotator``:
 
-1. **All-cheap**   – every sample is annotated by the cheap LLM (no routing).
+1. **All-cheap**    – every sample is annotated by the cheap LLM (no routing).
 2. **All-expensive** – every sample is annotated by the expensive LLM (quality
                        upper-bound).
 3. **CascadeRouter** – the cheap LLM is tried first; the judge LLM evaluates
@@ -17,6 +17,21 @@ Four routing conditions are compared using the same ``ActiveLearningFilter``
                        answer does not meet the quality threshold.
 4. **LLMRouter**     – a scorer LLM rates each candidate and the highest-rated
                        model is chosen per sample.
+5. **KNNRouter**     – k-nearest-neighbour routing: routes by finding the k
+                       most similar samples in a prebuilt embedding index
+                       trained on bootstrap CascadeRouter annotations.
+6. **GraphRouter**   – graph-based routing using Personalised PageRank on a
+                       sample-similarity graph trained on bootstrap annotations.
+7. **MLPRouter**     – a lightweight MLP trained on (sample, candidate) feature
+                       pairs derived from bootstrap annotations.
+
+Conditions 5–7 require an initial training phase.  In offline / mock mode
+(``--skip-llm``) lightweight stub routers are used instead and no model is
+loaded.
+
+A **resume mechanism** checks whether each condition's per-condition result
+JSON already exists in ``output_dir``.  Completed conditions are skipped,
+so a partially completed run can be resumed without redundant computation.
 
 Metrics show annotation quality (token-F1 / exact-match vs. ground truth)
 and the fraction of samples routed to the expensive LLM (cost proxy).
@@ -59,7 +74,7 @@ if _ROOT not in sys.path:
 # ---------------------------------------------------------------------------
 from annotation import Annotator
 from filters import ActiveLearningFilter
-from routers import CascadeRouter, LLMRouter
+from routers import CascadeRouter, LLMRouter, KNNRouter, GraphRouter, MLPRouter
 from tasks.qa import QATask
 
 # Default candidate LLMs — shared with test.py / HumanLLMAnnotationSystem.
@@ -104,8 +119,134 @@ class MockScorerLLM:
     Returns JSON scores preferring the expensive model.
     """
 
-    def generate(self, prompt: str, max_new_tokens: int = 80) -> str:
+    def generate(self, prompt: str, max_new_tokens: int = 200) -> str:
         return '[{"model": "cheap", "score": 0.4}, {"model": "expensive", "score": 0.8}]'
+
+
+# ---------------------------------------------------------------------------
+# Mock learning-based routers for offline testing (no transformer loading)
+# ---------------------------------------------------------------------------
+
+class MockKNNRouter:
+    """Offline-safe KNNRouter stub for ``--skip-llm`` mode.
+
+    Routes all candidates with uniform scores (no model loading, no training).
+    """
+
+    def __init__(self, candidate_llms: List[str]):
+        self.candidate_llms = list(candidate_llms)
+
+    def build_from_annotations(self, annotations: Any, out_dir: str = "./") -> None:
+        """No-op: mock router does not require training data."""
+
+    def score(self, sample_text: str, candidate_llms: List[str]) -> List[Dict[str, Any]]:
+        """Return uniform scores for all candidates."""
+        n = len(candidate_llms)
+        uniform = 1.0 / n if n else 0.0
+        return [{"model": c, "score": uniform} for c in candidate_llms]
+
+
+class MockGraphRouter(MockKNNRouter):
+    """Offline-safe GraphRouter stub for ``--skip-llm`` mode."""
+
+
+class MockMLPRouter(MockKNNRouter):
+    """Offline-safe MLPRouter stub for ``--skip-llm`` mode."""
+
+
+# ---------------------------------------------------------------------------
+# Resume-mechanism helpers
+# ---------------------------------------------------------------------------
+
+def _safe_name(cond_name: str) -> str:
+    """Convert a condition name to a filesystem-safe lowercase string."""
+    return re.sub(r"[() /\-]", "_", cond_name.lower()).strip("_")
+
+
+def _condition_result_path(cond_name: str, output_dir: str) -> str:
+    """Return the path to the per-condition result JSON file."""
+    return os.path.join(output_dir, f"result_{_safe_name(cond_name)}.json")
+
+
+def _condition_already_done(cond_name: str, output_dir: str) -> bool:
+    """Return ``True`` if *cond_name* has a cached result file in *output_dir*."""
+    return os.path.exists(_condition_result_path(cond_name, output_dir))
+
+
+def _load_condition_result(cond_name: str, output_dir: str) -> Dict[str, Any]:
+    """Load and return the cached per-condition result dict from disk."""
+    with open(_condition_result_path(cond_name, output_dir), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _save_condition_result(result: Dict[str, Any], output_dir: str) -> None:
+    """Persist a per-condition result dict to *output_dir*."""
+    path = _condition_result_path(result["condition"], output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Routing helpers used by the learning-based router conditions
+# ---------------------------------------------------------------------------
+
+def _route_direct(
+    router_obj: Any,
+    dataset: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Route *dataset* by calling ``router_obj.score()`` on each sample.
+
+    Bypasses ``BaseRouter.cold_start`` (which is triggered by
+    ``BaseRouter.route()`` when ``if_train`` returns ``True``).  We use this
+    for learning-based routers that are trained manually via
+    ``build_from_annotations()`` before inference.
+    """
+    candidate_llms = getattr(router_obj, "candidate_llms", [])
+    routed: List[Dict[str, Any]] = []
+    for d in dataset:
+        scores = router_obj.score(d.get("text", ""), candidate_llms)
+        if scores:
+            best = max(scores, key=lambda x: x.get("score", 0.0))
+            chosen = best.get("model")
+        else:
+            chosen = candidate_llms[0] if candidate_llms else None
+        routed.append({**d, "route": chosen, "route_scores": scores})
+    return routed
+
+
+def _ensure_bootstrap_cache(
+    filtered_data: List[Dict[str, Any]],
+    judge_llm: Any,
+    candidate_llms: List[str],
+    llm_dict: Dict[str, Any],
+    cascade_threshold: float,
+    output_dir: str,
+    n_bootstrap: int = 50,
+) -> List[Dict[str, Any]]:
+    """Return bootstrap-routed data for training learning-based routers.
+
+    Loads from ``{output_dir}/bootstrap_routed.json`` if it exists; otherwise
+    creates it by running ``CascadeRouter`` on the first *n_bootstrap* samples
+    of *filtered_data* and caching the result.
+    """
+    cache_path = os.path.join(output_dir, "bootstrap_routed.json")
+    if os.path.exists(cache_path):
+        with open(cache_path, encoding="utf-8") as f:
+            return json.load(f)
+    n_boot = min(n_bootstrap, len(filtered_data))
+    print(f"  Creating bootstrap training data ({n_boot} samples via CascadeRouter)…")
+    router = CascadeRouter(
+        judge_llm=judge_llm,
+        candidate_llm=candidate_llms,
+        llm_dict=llm_dict,
+        threshold=cascade_threshold,
+    )
+    routed = _route_direct(router, filtered_data[:n_boot])
+    os.makedirs(output_dir, exist_ok=True)
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(routed, f, indent=2, ensure_ascii=False)
+    return routed
 
 
 # ---------------------------------------------------------------------------
@@ -225,10 +366,15 @@ def run_experiment(
     candidate_llms: Optional[List[str]] = None,
     llm_dict: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Run four routing conditions following the HumanLLMAnnotationSystem pattern.
+    """Run seven routing conditions following the HumanLLMAnnotationSystem pattern.
 
     All conditions use the same ``ActiveLearningFilter`` pre-filter; only the
-    router changes.
+    router changes.  Conditions 5–7 are learning-based and require an
+    embedding model (sentence-transformers).  When *force_fallback* is
+    ``True`` (offline / mock mode) lightweight stub routers are used instead.
+
+    A **resume mechanism** skips any condition whose per-condition result JSON
+    already exists in *output_dir*, allowing partial runs to be resumed.
 
     Parameters
     ----------
@@ -243,11 +389,12 @@ def run_experiment(
     scorer_llm:
         LLM used as scorer by ``LLMRouter``.
     output_dir:
-        Directory for SFT JSONL outputs.
+        Directory for SFT JSONL outputs and per-condition result JSON files.
     cascade_threshold:
         Minimum quality score below which ``CascadeRouter`` escalates.
     force_fallback:
-        Passed to ``ActiveLearningFilter`` for offline mode.
+        Passed to ``ActiveLearningFilter`` for offline mode.  Also selects
+        mock stub routers for conditions 5–7.
     task:
         Task object (default: ``QATask``).
     candidate_llms:
@@ -255,8 +402,7 @@ def run_experiment(
         capable).  When provided, ``llm_dict`` must also be supplied.
         Defaults to the two-entry ``["cheap", "expensive"]`` fallback.
     llm_dict:
-        Mapping from LLM identifier to LLM instance.  Must be consistent
-        with ``candidate_llms``.
+        Mapping from LLM identifier to LLM instance.
 
     Returns
     -------
@@ -268,16 +414,13 @@ def run_experiment(
         task = QATask()
     os.makedirs(output_dir, exist_ok=True)
 
-    # Use caller-supplied candidate list (full pipeline) or fall back to the
-    # two-entry symbolic mapping for backward-compatible / mock-mode calls.
+    # Use caller-supplied candidate list or fall back to symbolic two-entry mapping.
     if candidate_llms is None or llm_dict is None:
         candidate_llms = ["cheap", "expensive"]
         llm_dict = {"cheap": cheap_llm, "expensive": expensive_llm}
 
-    # For "all-cheap" and "all-expensive" conditions, use the first and last
-    # entries of the candidate list respectively.
-    cheap_name = candidate_llms[0].split("/")[-1]  # Use model name suffix for readability  
-    expensive_name = candidate_llms[-1].split("/")[-1]  # Use model name suffix for readability
+    cheap_name = candidate_llms[0].split("/")[-1]
+    expensive_name = candidate_llms[-1].split("/")[-1]
 
     # Shared filter (same for all conditions, as in HumanLLMAnnotationSystem)
     al_filter = ActiveLearningFilter(
@@ -288,7 +431,10 @@ def run_experiment(
     )
     filtered = al_filter.filter(dataset)
 
-    # Four routing conditions
+    # ------------------------------------------------------------------
+    # Inner condition functions
+    # ------------------------------------------------------------------
+
     def _annotate_no_router(llm_name: str) -> List[Dict[str, Any]]:
         """Bypass routing: annotate every sample with a fixed LLM."""
         kb_path = os.path.join(output_dir, f"kb_no_router_{llm_name}.json")
@@ -316,37 +462,76 @@ def run_experiment(
         routed = router.route(filtered)
         return annotator.annotate_batch(routed)
 
-    _N = 4
-    print(f"\n[1/{_N}] Running condition: All-cheap …")
-    _data_cheap = _annotate_no_router(cheap_name)
-    print(f"\n[2/{_N}] Running condition: All-expensive …")
-    _data_expensive = _annotate_no_router(expensive_name)
-    print(f"\n[3/{_N}] Running condition: CascadeRouter …")
-    _data_cascade = _annotate_cascade()
-    print(f"\n[4/{_N}] Running condition: LLMRouter …")
-    _data_llm_router = _annotate_llm_router()
+    # Learning-based routers: use lightweight mock stubs in offline mode;
+    # instantiate real classes (which load sentence-transformers) in GPU mode.
+    if force_fallback:
+        knn_router: Any = MockKNNRouter(candidate_llms)
+        graph_router: Any = MockGraphRouter(candidate_llms)
+        mlp_router: Any = MockMLPRouter(candidate_llms)
+    else:
+        knn_router = KNNRouter(annotator=None, candidate_llms=candidate_llms)
+        graph_router = GraphRouter(annotator=None, candidate_llms=candidate_llms)
+        mlp_router = MLPRouter(annotator=None, candidate_llms=candidate_llms)
 
-    conditions_data = [
-        ("All-cheap",     _data_cheap),
-        ("All-expensive", _data_expensive),
-        ("CascadeRouter", _data_cascade),
-        ("LLMRouter",     _data_llm_router),
+    def _annotate_learning_router(cond_name: str, router_obj: Any) -> List[Dict[str, Any]]:
+        """Train router on bootstrap data (real mode only), then route the full
+        filtered set via ``_route_direct`` (bypasses ``BaseRouter.cold_start``)
+        and annotate with the chosen model.
+        """
+        kb_path = os.path.join(output_dir, f"kb_{_safe_name(cond_name)}.json")
+        annotator = Annotator(candidate_llms, llm_dict, task=task, kb_path=kb_path)
+        if not force_fallback:
+            bootstrap = _ensure_bootstrap_cache(
+                filtered_data=filtered,
+                judge_llm=judge_llm,
+                candidate_llms=candidate_llms,
+                llm_dict=llm_dict,
+                cascade_threshold=cascade_threshold,
+                output_dir=output_dir,
+            )
+            if bootstrap:
+                train_dir = os.path.join(output_dir, f"router_model_{_safe_name(cond_name)}")
+                router_obj.build_from_annotations(bootstrap, out_dir=train_dir)
+        routed = _route_direct(router_obj, filtered)
+        return annotator.annotate_batch(routed)
+
+    # ------------------------------------------------------------------
+    # Seven conditions — iterated with per-condition resume check
+    # ------------------------------------------------------------------
+
+    _N = 7
+    conditions: List[tuple] = [
+        ("All-cheap",     lambda: _annotate_no_router(cheap_name)),
+        ("All-expensive", lambda: _annotate_no_router(expensive_name)),
+        ("CascadeRouter", _annotate_cascade),
+        ("LLMRouter",     _annotate_llm_router),
+        ("KNNRouter",     lambda: _annotate_learning_router("KNNRouter", knn_router)),
+        ("GraphRouter",   lambda: _annotate_learning_router("GraphRouter", graph_router)),
+        ("MLPRouter",     lambda: _annotate_learning_router("MLPRouter", mlp_router)),
     ]
 
-    results = []
-    for cond_name, annotated in conditions_data:
+    results: List[Dict[str, Any]] = []
+    for i, (cond_name, fn) in enumerate(conditions, 1):
+        print(f"\n[{i}/{_N}] Running condition: {cond_name} …")
+        if _condition_already_done(cond_name, output_dir):
+            print(f"  ↳ Already done — loading cached result.")
+            results.append(_load_condition_result(cond_name, output_dir))
+            continue
+        annotated = fn()
         quality = evaluate_annotation_quality(annotated, expensive_llm_name=expensive_name)
-        safe_name = re.sub(r"[() /\-]", "_", cond_name.lower()).strip("_")
-        sft_path = os.path.join(output_dir, f"sft_routing_{safe_name}.jsonl")
+        safe_n = _safe_name(cond_name)
+        sft_path = os.path.join(output_dir, f"sft_routing_{safe_n}.jsonl")
         n_written = write_sft_jsonl(annotated, sft_path)
-        results.append({
+        result: Dict[str, Any] = {
             "condition": cond_name,
             "annotated": n_written,
             "annotation_f1": quality["annotation_f1"],
             "annotation_em": quality["annotation_em"],
             "expensive_call_rate": quality["expensive_call_rate"],
             "sft_file": sft_path,
-        })
+        }
+        _save_condition_result(result, output_dir)
+        results.append(result)
 
     return results
 
@@ -364,6 +549,7 @@ def print_results_table(results: List[Dict[str, Any]]) -> None:
     print("  LLM Routing — Quality vs Cost Tradeoff")
     print("  (Exp-Rate = fraction of samples routed to expensive LLM)")
     print("  (all conditions use the same ActiveLearningFilter + Annotator)")
+    print("  (✓ = loaded from cache)")
     print(sep)
     print(header)
     print(sep)
