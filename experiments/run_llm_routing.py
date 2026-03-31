@@ -434,8 +434,8 @@ def run_experiment(
         candidate_llms = ["cheap", "expensive"]
         llm_dict = {"cheap": cheap_llm, "expensive": expensive_llm}
 
-    cheap_name = candidate_llms[0].split("/")[-1]
-    expensive_name = candidate_llms[-1].split("/")[-1]
+    cheap_name = candidate_llms[0]
+    expensive_name = candidate_llms[-1]
 
     # Shared filter (same for all conditions, as in HumanLLMAnnotationSystem)
     al_filter = ActiveLearningFilter(
@@ -452,7 +452,7 @@ def run_experiment(
 
     def _annotate_no_router(llm_name: str) -> List[Dict[str, Any]]:
         """Bypass routing: annotate every sample with a fixed LLM."""
-        kb_path = os.path.join(output_dir, f"kb_no_router_{llm_name}.json")
+        kb_path = os.path.join(output_dir, f"kb_no_router_{_safe_name(llm_name)}.json")
         annotator = Annotator(candidate_llms, llm_dict, task=task, kb_path=kb_path)
         return annotator.annotate_batch(filtered, assigned_llm=llm_name)
 

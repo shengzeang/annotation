@@ -558,5 +558,87 @@ class TestNewRoutingConditions(unittest.TestCase):
             self.assertTrue(os.path.exists(path), f"Result JSON missing for {cond}")
 
 
+# ---------------------------------------------------------------------------
+# Exp-Rate correctness with slash-containing model names
+# ---------------------------------------------------------------------------
+
+class TestExpRateWithSlashModelNames(unittest.TestCase):
+    """Regression test: Exp-Rate must be correct when candidate_llms contain
+    slash-separated HuggingFace paths (e.g. 'Vendor/Model-7B').  Prior to
+    the fix, ``cheap_name = candidate_llms[0].split('/')[-1]`` produced a
+    basename that never matched either the ``llm_dict`` keys or the ``route``
+    field values stored by routers, causing exp_rate to always be 0.0.
+    """
+
+    def setUp(self):
+        self.dataset = _make_synthetic_dataset(n=10, seed=0)
+        self.tmp_dir = tempfile.mkdtemp()
+        # Slash-containing model names that mimic real HuggingFace paths
+        self.cheap_llm = MockAnnotationLLM()
+        self.expensive_llm = MockAnnotationLLM()
+        self.candidate_llms = ["MockVendor/Cheap-3B", "MockVendor/Expensive-14B"]
+        self.llm_dict = {
+            "MockVendor/Cheap-3B": self.cheap_llm,
+            "MockVendor/Expensive-14B": self.expensive_llm,
+        }
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _run(self):
+        return run_experiment(
+            dataset=self.dataset,
+            cheap_llm=self.cheap_llm,
+            expensive_llm=self.expensive_llm,
+            judge_llm=MockJudgeLLM(),
+            scorer_llm=MockScorerLLM(),
+            output_dir=self.tmp_dir,
+            force_fallback=True,
+            candidate_llms=self.candidate_llms,
+            llm_dict=self.llm_dict,
+        )
+
+    def test_all_expensive_exp_rate_is_one(self):
+        """All-expensive must report exp_rate=1.0 with slash model names."""
+        results = self._run()
+        all_exp = next(r for r in results if r["condition"] == "All-expensive")
+        self.assertAlmostEqual(
+            all_exp["expensive_call_rate"], 1.0,
+            msg="All-expensive exp_rate should be 1.0 with slash model names",
+        )
+
+    def test_all_cheap_exp_rate_is_zero(self):
+        """All-cheap must report exp_rate=0.0 with slash model names."""
+        results = self._run()
+        all_cheap = next(r for r in results if r["condition"] == "All-cheap")
+        self.assertAlmostEqual(
+            all_cheap["expensive_call_rate"], 0.0,
+            msg="All-cheap exp_rate should be 0.0 with slash model names",
+        )
+
+    def test_cascade_exp_rate_nonzero_with_always_fail_judge(self):
+        """MockJudgeLLM always returns 0 → CascadeRouter always escalates to
+        expensive, so exp_rate must be > 0 with slash model names."""
+        results = self._run()
+        cascade = next(r for r in results if r["condition"] == "CascadeRouter")
+        self.assertGreater(
+            cascade["expensive_call_rate"], 0.0,
+            msg="CascadeRouter exp_rate must be > 0 when judge always fails",
+        )
+
+    def test_no_sft_path_contains_slash_from_model_name(self):
+        """SFT file paths must not contain bare model-name slashes that would
+        create accidental sub-directories."""
+        results = self._run()
+        for r in results:
+            sft = r["sft_file"]
+            # The basename of the SFT path (filename only) must not contain '/'
+            self.assertNotIn(
+                "/", os.path.basename(sft),
+                msg=f"SFT path basename contains '/' for condition {r['condition']}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
