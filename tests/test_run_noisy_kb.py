@@ -133,6 +133,7 @@ class TestMockContextAwareLLM(unittest.TestCase):
         prompt = self._rag_prompt("wrong_answer", "wrong_answer", "Paris")
         out = self.llm.generate(prompt)
         self.assertIn("wrong_answer", out)
+        self.assertNotIn("Paris", out)
 
     def test_majority_vote_correct_when_majority_correct(self):
         """With 2 correct entries and 1 noisy, majority vote returns correct."""
@@ -608,7 +609,7 @@ class TestRunExperiment(unittest.TestCase):
         noisy = next(r for r in results if r["noise_rate"] == 0.75)
         self.assertGreater(clean["annotation_f1"], noisy["annotation_f1"])
 
-    def test_f1_decreases_with_noise_rate(self):
+    def test_f1_lower_at_high_noise_than_zero_noise(self):
         """Across the full noise range, F1 at 0% should exceed F1 at 75%.
 
         Strict per-step monotonicity can be fragile with small seed sizes;
