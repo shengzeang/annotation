@@ -1,16 +1,42 @@
 from typing import List, Dict, Any
 import time
 import logging
+import numpy as np
 
 from base_structure.base_filter import BaseFilter
-from base_structure.active_learning import DataPool, BertEmbeddings, BertKM, SurprisalEmbeddings, ALPS
+from base_structure.active_learning import (
+    DataPool, BertEmbeddings, BertKM, SurprisalEmbeddings, ALPS, Embeddings,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class _NoOpEmbeddings(Embeddings):
+    """Trivial embedder used when ``force_fallback=True``.
+
+    Returns zero-vectors so that no BERT / MLM model needs to be loaded.
+    The actual selection is delegated to the deterministic first-K fallback
+    inside ``BertKM`` / ``ALPS`` (enabled by ``force_fallback=True``), so
+    the embedding values are never used.
+    """
+
+    def encode(self, texts) -> np.ndarray:
+        return np.zeros((len(texts), 2), dtype=np.float32)
+
 
 class ActiveLearningFilter(BaseFilter):
     """
     Active Learning filter implementation.
     Supported selection methods: "alps", "bertkm".
+
+    Parameters
+    ----------
+    force_fallback : bool
+        When ``True`` (default), a no-op embedder is used so that no
+        BERT / MLM model is downloaded.  Selection falls back to a
+        deterministic first-K strategy inside ``BertKM`` / ``ALPS``.
+        Set to ``False`` to use real BERT embeddings (requires network
+        access and a compatible model).
     """
     def __init__(self, method="alps", budget=100, batch_size=10, model_name="bert-base-uncased", force_fallback=True):
         self.method = method.lower()
@@ -19,14 +45,25 @@ class ActiveLearningFilter(BaseFilter):
         self.model_name = model_name
         self.force_fallback = force_fallback
 
-        if self.method == "bertkm":
-            self.emb = BertEmbeddings(model_name=self.model_name)
-            self.selector = BertKM(self.emb, budget=self.budget, batch_size=self.batch_size, force_fallback=self.force_fallback)
-        elif self.method == "alps":
-            self.emb = SurprisalEmbeddings(model_name=self.model_name, batch_size=self.batch_size)
-            self.selector = ALPS(self.emb, budget=self.budget, batch_size=self.batch_size, force_fallback=self.force_fallback)
+        if self.force_fallback:
+            # Use a no-op embedder so no model needs to be downloaded /
+            # loaded.  The selectors' own force_fallback logic takes over.
+            self.emb = _NoOpEmbeddings()
+            if self.method == "bertkm":
+                self.selector = BertKM(self.emb, budget=self.budget, batch_size=self.batch_size)
+            elif self.method == "alps":
+                self.selector = ALPS(self.emb, budget=self.budget, batch_size=self.batch_size, force_fallback=True)
+            else:
+                raise ValueError(f"Unknown active learning method: {self.method}")
         else:
-            raise ValueError(f"Unknown active learning method: {self.method}")
+            if self.method == "bertkm":
+                self.emb = BertEmbeddings(model_name=self.model_name)
+                self.selector = BertKM(self.emb, budget=self.budget, batch_size=self.batch_size, force_fallback=False)
+            elif self.method == "alps":
+                self.emb = SurprisalEmbeddings(model_name=self.model_name, batch_size=self.batch_size)
+                self.selector = ALPS(self.emb, budget=self.budget, batch_size=self.batch_size, force_fallback=False)
+            else:
+                raise ValueError(f"Unknown active learning method: {self.method}")
 
     def filter(self, raw_dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """

@@ -256,7 +256,7 @@ class TestSquadDataset(unittest.TestCase):
         return path
 
     def test_from_file_returns_correct_length(self):
-        from datasets.qa_datasets import SquadDataset
+        from qa_data.qa_datasets import SquadDataset
         path = self._make_squad_file()
         try:
             ds = SquadDataset.from_file(path)
@@ -265,7 +265,7 @@ class TestSquadDataset(unittest.TestCase):
             os.unlink(path)
 
     def test_from_file_max_samples_respected(self):
-        from datasets.qa_datasets import SquadDataset
+        from qa_data.qa_datasets import SquadDataset
         path = self._make_squad_file()
         try:
             ds = SquadDataset.from_file(path, max_samples=1)
@@ -274,7 +274,7 @@ class TestSquadDataset(unittest.TestCase):
             os.unlink(path)
 
     def test_from_file_has_required_keys(self):
-        from datasets.qa_datasets import SquadDataset
+        from qa_data.qa_datasets import SquadDataset
         path = self._make_squad_file()
         try:
             ds = SquadDataset.from_file(path)
@@ -285,7 +285,7 @@ class TestSquadDataset(unittest.TestCase):
             os.unlink(path)
 
     def test_from_file_skips_impossible_questions(self):
-        from datasets.qa_datasets import SquadDataset
+        from qa_data.qa_datasets import SquadDataset
         squad = {
             "data": [{
                 "title": "T",
@@ -308,7 +308,7 @@ class TestSquadDataset(unittest.TestCase):
             os.unlink(path)
 
     def test_to_sft_format(self):
-        from datasets.qa_datasets import SquadDataset
+        from qa_data.qa_datasets import SquadDataset
         path = self._make_squad_file()
         try:
             ds = SquadDataset.from_file(path)
@@ -324,7 +324,7 @@ class TestSquadDataset(unittest.TestCase):
 class TestCommonQADataset(unittest.TestCase):
 
     def test_from_file_list_format(self):
-        from datasets.qa_datasets import CommonQADataset
+        from qa_data.qa_datasets import CommonQADataset
         data = [
             {"id": "1", "question": "Q1?", "context": "ctx1", "answer": "A1"},
             {"id": "2", "question": "Q2?", "context": "ctx2", "answer": "A2"},
@@ -339,7 +339,7 @@ class TestCommonQADataset(unittest.TestCase):
             os.unlink(path)
 
     def test_from_file_single_dict_format(self):
-        from datasets.qa_datasets import CommonQADataset
+        from qa_data.qa_datasets import CommonQADataset
         data = {"question": "Q?", "context": "ctx", "answer": "A"}
         fd, path = tempfile.mkstemp(suffix=".json")
         with os.fdopen(fd, "w") as f:
@@ -351,7 +351,7 @@ class TestCommonQADataset(unittest.TestCase):
             os.unlink(path)
 
     def test_save_sft_writes_jsonl(self):
-        from datasets.qa_datasets import CommonQADataset
+        from qa_data.qa_datasets import CommonQADataset
         data = [{"question": "Q?", "context": "ctx", "answer": "A", "text": "Q? ctx", "id": "1"}]
         fd, path = tempfile.mkstemp(suffix=".json")
         with os.fdopen(fd, "w") as f:

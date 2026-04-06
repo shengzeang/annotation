@@ -5,18 +5,26 @@ from annotation import Annotator
 from filters import ActiveLearningFilter, LLMNaiveFilter
 from routers import KNNRouter, CascadeRouter
 from tasks.qa import QATask
-from datasets import SquadDataset
+from qa_data import SquadDataset
 from utils import export_annotation_results
 from misc.llm_provider import LocalLLM, APILLM
 from scripts.select_best_route import select_best
 
+# Default LLMs for the full annotation pipeline (cheapest → most capable).
+DEFAULT_CANDIDATE_LLMS = [
+    "Qwen/Qwen2.5-3B-Instruct",
+    "Qwen/Qwen2.5-7B-Instruct",
+    "Qwen/Qwen2.5-14B-Instruct",
+]
 
 # ==============================
 # main process
 # ==============================
 
 class HumanLLMAnnotationSystem:
-    def __init__(self, candidate_llms, task=QATask(), llm_mode="local", api_config=None):
+    def __init__(self, candidate_llms=None, task=QATask(), llm_mode="local", api_config=None):
+        if candidate_llms is None:
+            candidate_llms = DEFAULT_CANDIDATE_LLMS
         self.candidate_llms = candidate_llms
         self.llm_mode = llm_mode
         self.llm_dict = {}
@@ -31,11 +39,14 @@ class HumanLLMAnnotationSystem:
             raise ValueError(f"Unknown llm_mode: {llm_mode}")
 
         self.filter_1 = ActiveLearningFilter(method="alps", budget=1000, batch_size=50)
-        self.filter_2 = LLMNaiveFilter(self.llm_dict["Qwen/Qwen2.5-7B-Instruct"], budget=500)
+        # Pick the middle candidate as the naive pre-filter LLM so the choice
+        # scales gracefully when candidate_llms is customised.
+        _filter_llm_key = candidate_llms[len(candidate_llms) // 2]
+        self.filter_2 = LLMNaiveFilter(self.llm_dict[_filter_llm_key], budget=500)
         # create annotator first and pass it to the router which requires it
         self.annotator = Annotator(self.candidate_llms, self.llm_dict, task=task)
         self.router = KNNRouter(self.annotator, candidate_llms, encoder_name="sentence-transformers/all-MiniLM-L6-v2", k=5, train_budget=100)
-        # self.router = CascadeRouter(judge_llm=self.llm_dict["Qwen/Qwen2.5-14B-Instruct"], candidate_llm=candidate_llms, llm_dict=self.llm_dict, threshold=0.7)
+        # self.router = CascadeRouter(judge_llm=self.llm_dict[candidate_llms[-1]], candidate_llm=candidate_llms, llm_dict=self.llm_dict, threshold=0.7)
 
 
     def run(self, raw_dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -68,12 +79,7 @@ if __name__ == "__main__":
     raw_data = SquadDataset.from_url(save_path="squad_train.json", max_samples=10000, skip_initial=500, shuffle_seed=42)
     task = QATask()
 
-    candidate_llms = ["Qwen/Qwen2.5-3B-Instruct",
-            "Qwen/Qwen2.5-7B-Instruct",
-            "Qwen/Qwen2.5-14B-Instruct",]
-            #"Qwen/Qwen2.5-32B-Instruct"]
-    # candidate_llms = ["Qwen/Qwen2.5-32B-Instruct"]
-    system = HumanLLMAnnotationSystem(candidate_llms, task)
+    system = HumanLLMAnnotationSystem(task=task)
     results = system.run(raw_data)
 
     logger = logging.getLogger(__name__)

@@ -51,6 +51,7 @@ class VectorKnowledgeBase:
         self.kb_path = kb_path
         self.encoder_name = encoder_name
         self._encoder = encoder  # lazily initialised when first needed
+        self._encoder_unavailable: bool = False  # set True on permanent load failure
 
         self.entries: List[Dict[str, Any]] = []
         self._q_embeddings: Optional[np.ndarray] = None  # shape [N, D]
@@ -63,7 +64,7 @@ class VectorKnowledgeBase:
 
     def _get_encoder(self):
         """Return (and lazily initialise) the sentence-transformer encoder."""
-        if self._encoder is None:
+        if self._encoder is None and not self._encoder_unavailable:
             try:
                 from sentence_transformers import SentenceTransformer  # type: ignore
 
@@ -75,6 +76,8 @@ class VectorKnowledgeBase:
                     self.encoder_name,
                     exc,
                 )
+                # Cache the failure so we don't retry on every call.
+                self._encoder_unavailable = True
         return self._encoder
 
     def _encode(self, texts: List[str]) -> Optional[np.ndarray]:

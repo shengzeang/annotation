@@ -167,7 +167,37 @@ class TestLLMRouter(unittest.TestCase):
             self.assertIn("model", s)
             self.assertIn("score", s)
 
-    def test_score_fallback_returns_sorted_desc(self):
+    def test_score_fallback_when_scorer_raises(self):
+        """If scorer.generate() raises an exception, score() must fall back to
+        heuristic scoring instead of propagating the exception."""
+        from routers.llm_router import LLMRouter
+        scorer = MagicMock()
+        scorer.generate.side_effect = RuntimeError("CUDA out of memory")
+        router = LLMRouter(scorer, candidate_llms=["model-a", "model-b"])
+        # Must not raise; must return a valid list of scored candidates
+        scores = router.score("some sample text", ["model-a", "model-b"])
+        self.assertEqual(len(scores), 2)
+        for s in scores:
+            self.assertIn("model", s)
+            self.assertIn("score", s)
+            self.assertIsInstance(s["score"], float)
+
+    def test_score_fallback_when_scorer_returns_empty_json_array(self):
+        """scorer.generate() returning '[]' (valid but empty JSON) must trigger
+        the heuristic fallback — not return an empty list that would crash
+        max() in BaseRouter.route()."""
+        from routers.llm_router import LLMRouter
+        scorer = MagicMock()
+        scorer.generate.return_value = "[]"
+        router = LLMRouter(scorer, candidate_llms=["model-a", "model-b"])
+        scores = router.score("some sample text", ["model-a", "model-b"])
+        # Must return a non-empty list so max() in route() doesn't crash
+        self.assertGreater(len(scores), 0)
+        for s in scores:
+            self.assertIn("model", s)
+            self.assertIn("score", s)
+            self.assertIsInstance(s["score"], float)
+
         router, _ = self._make_router("invalid json")
         scores = router.score("model-a model-b", ["model-a", "model-b"])
         result_scores = [s["score"] for s in scores]
@@ -250,6 +280,28 @@ class TestBaseRouterRoute(unittest.TestCase):
             self.assertEqual(orig["id"], routed["id"])
             self.assertEqual(orig["text"], routed["text"])
 
+    def test_route_handles_empty_scores_gracefully(self):
+        """BaseRouter.route() must not crash when score() returns [].
+        It should fall back to the first candidate instead of raising
+        ValueError from max()."""
+        from routers.llm_router import LLMRouter
 
-if __name__ == "__main__":
-    unittest.main()
+        # Craft a scorer that always returns "[]" — an edge case that
+        # previously caused max() to raise ValueError inside route().
+        class _EmptyScorerLLM:
+            def generate(self, prompt, **kwargs):
+                return "[]"
+
+        router = LLMRouter(
+            scorer=_EmptyScorerLLM(),
+            candidate_llms=["model-a", "model-b"],
+        )
+        dataset = _make_dataset(n=3)
+        # Must not raise; every item should have a 'route' field
+        result = router.route(dataset)
+        self.assertEqual(len(result), 3)
+        for item in result:
+            self.assertIn("route", item)
+            # Falls back to first candidate when scores are empty
+            self.assertEqual(item["route"], "model-a")
+

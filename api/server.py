@@ -12,6 +12,13 @@ import ast
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
+# Default candidate LLMs used when the request payload does not specify any.
+DEFAULT_CANDIDATE_LLMS = [
+    "Qwen/Qwen2.5-3B-Instruct",
+    "Qwen/Qwen2.5-7B-Instruct",
+    "Qwen/Qwen2.5-14B-Instruct",
+]
+
 app = Flask(__name__)
 if CORS is not None:
     # allow all origins for local development
@@ -344,7 +351,7 @@ def process_run_graph(payload: Dict[str, Any], run_id: str):
                     max_samples = int(params.get('max_samples', 200))
                     if ds == 'squad':
                         try:
-                            from datasets import SquadDataset
+                            from qa_data import SquadDataset
                             tmp_path = os.path.join(ROOT_DIR, 'squad_tmp.json')
                             data = SquadDataset.from_url(save_path=tmp_path, max_samples=max_samples)
                         except Exception as e:
@@ -355,7 +362,7 @@ def process_run_graph(payload: Dict[str, Any], run_id: str):
                                 fp = p if os.path.isabs(p) else os.path.join(ROOT_DIR, p)
                                 tried.append(fp)
                                 try:
-                                    from datasets import SquadDataset
+                                    from qa_data import SquadDataset
                                     if os.path.exists(fp):
                                         try:
                                             data = SquadDataset.from_file(fp, max_samples=max_samples)
@@ -456,7 +463,7 @@ def process_run_graph(payload: Dict[str, Any], run_id: str):
             elif ntype == 'Router':
                 clsname = params.get('router_class', 'routers.KNNRouter')
                 rparams = params.get('router_params', {}) or {}
-                candidate_llms = params.get('candidate_llms', [])
+                candidate_llms = params.get('candidate_llms') or DEFAULT_CANDIDATE_LLMS
                 try:
                     module_name, class_name = clsname.rsplit('.', 1)
                     mod = importlib.import_module(module_name)
@@ -549,7 +556,7 @@ def process_run_graph(payload: Dict[str, Any], run_id: str):
                 context[nid] = out
 
             elif ntype == 'Annotate' or ntype == 'Annotation':
-                candidate_llms = params.get('candidate_llms', [])
+                candidate_llms = params.get('candidate_llms') or DEFAULT_CANDIDATE_LLMS
                 llm_mode = params.get('llm_mode', 'local')
                 api_config = params.get('api_config', {})
                 task_class = params.get('task_class', 'tasks.QATask')

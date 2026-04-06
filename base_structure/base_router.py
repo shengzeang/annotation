@@ -4,9 +4,6 @@ from tqdm import tqdm
 import json
 import os
 
-from utils import export_annotation_results
-from scripts.select_best_route import select_best
-
 
 class BaseRouter(ABC):
     """Abstract router interface for scoring candidate LLMs.
@@ -35,6 +32,8 @@ class BaseRouter(ABC):
     def route(self, dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """see if the router needs training, if so, train it"""
         if self.if_train and not self.ready:
+            from utils import export_annotation_results  # lazy: only needed for cold-start
+            from scripts.select_best_route import select_best  # lazy: only needed for cold-start
             self.cold_start(
                 raw_dataset=dataset.to_list() if hasattr(dataset, 'to_list') else dataset,
                 annotator=getattr(self, 'annotator', None),
@@ -51,8 +50,15 @@ class BaseRouter(ABC):
             # If a router is provided (e.g., MLPRouter), use it to score candidates
             scores = self.score(d.get('text', ''), self.candidate_llms)
             # scores -> list of {model, score}
-            best = max(scores, key=lambda x: x.get('score', 0.0))
-            chosen = best.get('model')
+            if scores:
+                best = max(scores, key=lambda x: x.get('score', 0.0))
+                chosen = best.get('model')
+            else:
+                # Defensive fallback: score() returned empty list; use first candidate.
+                # candidate_llms must be non-empty for a router to be meaningful;
+                # if it is somehow empty, chosen stays None and the annotator will
+                # fall back to its own first-candidate logic.
+                chosen = self.candidate_llms[0] if getattr(self, 'candidate_llms', None) else None
             routed.append({**d, 'route': chosen, 'route_scores': scores})
             # report progress if callback provided
             try:

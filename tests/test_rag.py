@@ -432,5 +432,12 @@ class TestAPILLMLogprobs(unittest.TestCase):
         self.assertIsNone(avg_lp)
 
 
+# ---------------------------------------------------------------------------
+# VectorKnowledgeBase – (workaround tests removed: local datasets/ package has
+# been renamed to qa_data/ so the HuggingFace datasets package is no longer
+# shadowed and no sys.modules manipulation is needed in _get_encoder())
+# ---------------------------------------------------------------------------
+
+
 if __name__ == "__main__":
     unittest.main()

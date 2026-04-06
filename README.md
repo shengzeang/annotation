@@ -75,8 +75,127 @@ The frontend of DataFlow-Annotator is built using **React-Flow** for the user in
 - **`routers/`**: Router implementations (cascade, knn, mlp, llm, routerdc, graph, etc.).
 - **`filters/`**: Filter implementations (active learning, dataflow adapters, LLM-based filters).
 - **`tasks/`**: Task definitions and parsing logic (QA, classification, NER, summarization, translation).
-- **`datasets/`**: Lightweight dataset adapters and converters (SQuAD helpers, generic QA parsers).
+- **`qa_data/`**: Lightweight dataset adapters and converters (SQuAD helpers, generic QA parsers).
 - **`misc/`**: Helper scripts, evaluation tools, and providers (e.g., `evaluate.py`, `llm_provider.py`).
+- **`experiments/`**: Experiment scripts comparing annotation conditions with real Qwen LLMs and optional downstream fine-tuning.
+
+---
+
+## 🧪 Experiments
+
+### Oracle vs DataFlow-Annotator — QA Annotation Comparison (Qwen LLMs)
+
+`experiments/run_label_studio_comparison.py` benchmarks DataFlow-Annotator
+against oracle LLM annotation using **Qwen fine-tuning as the downstream
+evaluation task**.  All annotation is performed by real Qwen models (via
+`misc/llm_provider.LocalLLM` or compatible API).  Downstream fine-tuning
+delegates to `misc/evaluate.py`'s `finetune_sft()` and `evaluate()`
+(requires GPU); omit `--skip-finetune` to run the full pipeline.
+
+**Five conditions are compared:**
+
+| Condition | Description |
+|---|---|
+| Single Oracle | One call to a large Qwen model (e.g. Qwen2.5-72B) per sample |
+| 3-Oracle Majority Vote | Three independent Qwen calls; majority vote decides the annotation |
+| DataFlow (naive LLM) | Qwen-7B annotation without KB/RAG |
+| DataFlow (KB + RAG) | Qwen-7B with in-context KB retrieval augmentation |
+| DataFlow (full pipeline) | Qwen-7B with KB + RAG + stricter confidence threshold |
+
+**Metrics:** `Ann-F1` / `Ann-EM`, `DS-BLEU` / `DS-ROUGE-L` (GPU required).
+
+```bash
+python experiments/run_label_studio_comparison.py --samples 500 --skip-finetune
+```
+
+---
+
+### Active Learning — Annotation Budget Comparison
+
+`experiments/run_active_learning.py` shows how **active learning sampling**
+improves data quality within a fixed annotation budget.  Five strategies are
+compared: random sampling, TF-IDF diversity k-means, uncertainty-length proxy,
+and the repository's `ActiveLearningFilter` (ALPS force-fallback — no BERT
+required).  A real Qwen model can be injected with `--model`; pass `--skip-llm`
+for a zero-GPU smoke-test.
+
+| Condition | Description |
+|---|---|
+| Full dataset | Annotate all samples (quality upper-bound) |
+| Random sampling | Random budget-sized subset |
+| Diversity (TF-IDF) | k-means cluster representatives on TF-IDF features |
+| Uncertainty (length) | Samples deviating most from mean text length |
+| ALPS (force-fallback) | Repository's `ActiveLearningFilter` (deterministic fallback) |
+
+**Metrics:** `Ann-F1` / `Ann-EM` per condition.
+
+```bash
+# Offline smoke-test (no GPU)
+python experiments/run_active_learning.py --samples 200 --budget 50 --skip-llm
+
+# Real Qwen annotation
+python experiments/run_active_learning.py \
+    --samples 500 --budget 100 \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --squad-path path/to/train-v1.1.json
+```
+
+---
+
+### LLM Routing — Cost-Quality Tradeoff
+
+`experiments/run_llm_routing.py` demonstrates how the repository's routing
+strategies balance annotation **quality vs. cost** (fraction of calls to the
+expensive LLM).  Two real Qwen models play the role of cheap / expensive
+annotator; a third judge model drives `CascadeRouter` and `LLMRouter`.
+
+| Condition | Description |
+|---|---|
+| All-cheap | Every sample goes to the cheap / fast LLM |
+| All-expensive | Every sample goes to the expensive / capable LLM |
+| Cascade | Try cheap first; escalate to expensive when judge deems answer wrong |
+| LLM Router | Judge LLM scores each candidate and picks the best one |
+
+**Metrics:** `Ann-F1` / `Ann-EM`, `Exp-Rate` (expensive-LLM call fraction).
+
+```bash
+# Offline smoke-test (no GPU)
+python experiments/run_llm_routing.py --samples 200 --skip-llm
+
+# Real Qwen routing
+python experiments/run_llm_routing.py \
+    --cheap-model   Qwen/Qwen2.5-7B-Instruct \
+    --expensive-model Qwen/Qwen2.5-72B-Instruct
+```
+
+---
+
+### RAG — Retrieval-Augmented Annotation
+
+`experiments/run_rag.py` compares four retrieval strategies for knowledge-base
+augmentation.  All conditions use the same LLM; the difference is how
+in-context examples are fetched from the growing KB.  Quality improves as the
+KB fills with high-confidence annotations.
+
+| Condition | Description |
+|---|---|
+| No RAG | Plain LLM annotation without retrieval |
+| RAG (Jaccard) | Word-overlap retrieval (no extra deps) |
+| RAG (TF-IDF) | TF-IDF cosine retrieval (scikit-learn) |
+| RAG (Semantic) | Sentence-transformer retrieval (falls back to TF-IDF) |
+
+**Metrics:** `Ann-F1` / `Ann-EM`, `KB-Final` (KB size), per-window F1 trend.
+
+```bash
+# Offline smoke-test (no GPU)
+python experiments/run_rag.py --samples 200 --skip-llm
+
+# Real Qwen annotation with semantic RAG
+python experiments/run_rag.py \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --samples 500 \
+    --squad-path path/to/train-v1.1.json
+```
 
 ---
 
