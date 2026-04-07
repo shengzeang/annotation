@@ -25,7 +25,7 @@ Four conditions are compared, varying only the initial KB noise rate:
 3. **Noise 50pct (50%)** – moderate noise; visible degradation.
 4. **Noise 75pct (75%)** – severe noise; rapid, continuous degradation.
 
-All conditions use the same ``ActiveLearningFilter`` + ``CascadeRouter`` +
+All conditions use the same ``ActiveLearningFilter`` + ``KNNRouter`` +
 ``Annotator(rag=True)`` pipeline, varying only the pre-seeded KB content.
 
 Usage
@@ -64,7 +64,7 @@ if _ROOT not in sys.path:
 # ---------------------------------------------------------------------------
 from annotation import Annotator
 from filters import ActiveLearningFilter
-from routers import CascadeRouter
+from routers import CascadeRouter, KNNRouter
 from tasks.qa import QATask
 
 # Default candidate LLMs — shared with test.py / HumanLLMAnnotationSystem.
@@ -144,10 +144,29 @@ class MockContextAwareLLM:
 
 
 class MockJudgeLLM:
-    """Judge LLM stub for CascadeRouter — always keeps the cheap model."""
+    """Judge LLM stub for CascadeRouter bootstrap — always keeps the cheap model."""
 
     def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
         return "1"
+
+
+class MockKNNRouter:
+    """Offline-safe KNNRouter stub for ``--skip-llm`` mode.
+
+    Routes all candidates with uniform scores (no model loading, no training).
+    """
+
+    def __init__(self, candidate_llms: List[str]) -> None:
+        self.candidate_llms = list(candidate_llms)
+
+    def build_from_annotations(self, annotations: Any, out_dir: str = "./") -> None:
+        """No-op: mock router does not require training data."""
+
+    def score(self, sample_text: str, candidate_llms: List[str]) -> List[Dict[str, Any]]:
+        """Return uniform scores for all candidates."""
+        n = len(candidate_llms)
+        uniform = 1.0 / n if n else 0.0
+        return [{"model": c, "score": uniform} for c in candidate_llms]
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +402,65 @@ def _save_condition_result(result: Dict[str, Any], output_dir: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Routing helpers (learning-based router support)
+# ---------------------------------------------------------------------------
+
+def _route_direct(
+    router_obj: Any,
+    dataset: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Route *dataset* by calling ``router_obj.score()`` on each sample.
+
+    Bypasses ``BaseRouter.cold_start`` (triggered by ``BaseRouter.route()``
+    when ``if_train`` returns ``True``).  Used for KNNRouter after it has
+    been trained via ``build_from_annotations()``.
+    """
+    candidate_llms = getattr(router_obj, "candidate_llms", [])
+    routed: List[Dict[str, Any]] = []
+    for d in dataset:
+        scores = router_obj.score(d.get("text", ""), candidate_llms)
+        if scores:
+            best = max(scores, key=lambda x: x.get("score", 0.0))
+            chosen = best.get("model")
+        else:
+            chosen = candidate_llms[0] if candidate_llms else None
+        routed.append({**d, "route": chosen, "route_scores": scores})
+    return routed
+
+
+def _ensure_bootstrap_cache(
+    filtered_data: List[Dict[str, Any]],
+    judge_llm: Any,
+    candidate_llms: List[str],
+    llm_dict: Dict[str, Any],
+    output_dir: str,
+    n_bootstrap: int = 50,
+) -> List[Dict[str, Any]]:
+    """Return bootstrap-routed data for training the KNNRouter.
+
+    Loads from ``{output_dir}/bootstrap_routed.json`` if it already exists;
+    otherwise runs ``CascadeRouter`` on the first *n_bootstrap* samples of
+    *filtered_data* and caches the result.
+    """
+    cache_path = os.path.join(output_dir, "bootstrap_routed.json")
+    if os.path.exists(cache_path):
+        with open(cache_path, encoding="utf-8") as f:
+            return json.load(f)
+    n_boot = min(n_bootstrap, len(filtered_data))
+    print(f"  Creating bootstrap training data ({n_boot} samples via CascadeRouter)…")
+    router = CascadeRouter(
+        judge_llm=judge_llm,
+        candidate_llm=candidate_llms,
+        llm_dict=llm_dict,
+    )
+    routed = _route_direct(router, filtered_data[:n_boot])
+    os.makedirs(output_dir, exist_ok=True)
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(routed, f, indent=2, ensure_ascii=False)
+    return routed
+
+
+# ---------------------------------------------------------------------------
 # Experiment runner
 # ---------------------------------------------------------------------------
 
@@ -427,7 +505,8 @@ def run_experiment(
     llm:
         Primary annotation LLM (or ``MockContextAwareLLM`` in offline mode).
     judge_llm:
-        Judge LLM for ``CascadeRouter``.
+        Judge LLM used by ``CascadeRouter`` to generate KNNRouter bootstrap
+        training data (real mode only; ignored in offline mode).
     output_dir:
         Directory for KB files, SFT JSONL outputs and per-condition JSONs.
     noise_rates:
@@ -480,12 +559,26 @@ def run_experiment(
         )
         filtered = al_filter.filter(annotation_pool)
 
-        router = CascadeRouter(
-            judge_llm=judge_llm,
-            candidate_llm=candidate_llms,
-            llm_dict=llm_dict,
-        )
-        routed = router.route(filtered)
+        # Use KNNRouter as the default router.
+        # In offline mode use a lightweight mock (no transformer loading).
+        # In real mode bootstrap training data via CascadeRouter and then
+        # train the KNNRouter before routing the full filtered set.
+        if force_fallback:
+            router: Any = MockKNNRouter(candidate_llms)
+        else:
+            bootstrap = _ensure_bootstrap_cache(
+                filtered_data=filtered,
+                judge_llm=judge_llm,
+                candidate_llms=candidate_llms,
+                llm_dict=llm_dict,
+                output_dir=output_dir,
+            )
+            router = KNNRouter(annotator=None, candidate_llms=candidate_llms)
+            if bootstrap:
+                train_dir = os.path.join(output_dir, "router_model_knn")
+                router.build_from_annotations(bootstrap, out_dir=train_dir)
+
+        routed = _route_direct(router, filtered)
     else:
         routed = []  # unused — all conditions will be loaded from cache
 
@@ -634,7 +727,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
     parser.add_argument(
         "--judge-model", default=None,
-        help="Judge LLM for CascadeRouter (defaults to last --models entry)",
+        help="Judge LLM for CascadeRouter bootstrap (defaults to last --models entry)",
     )
     parser.add_argument(
         "--noise-rates", type=float, nargs="+",
