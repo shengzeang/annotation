@@ -145,7 +145,7 @@ def write_sft_jsonl(annotated: List[Dict[str, Any]], path: str) -> int:
 # Dataset helpers
 # ---------------------------------------------------------------------------
 
-def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]]:
+def _make_synthetic_dataset(n: int = 10000, seed: int = 42) -> List[Dict[str, Any]]:
     """Generate a synthetic SQuAD-style dataset for offline testing."""
     rng = random.Random(seed)
     topics = [
@@ -174,7 +174,7 @@ def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]
     return dataset
 
 
-def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str, Any]]:
+def load_squad_dataset(squad_path: str, max_samples: int = 10000) -> List[Dict[str, Any]]:
     """Load SQuAD dataset from *squad_path*; fall back to synthetic data."""
     if squad_path and os.path.exists(squad_path):
         import importlib.util
@@ -189,7 +189,7 @@ def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str
     return _make_synthetic_dataset(n=max_samples)
 
 
-def load_hotpot_dataset(hotpot_path: str, max_samples: int = 200) -> List[Dict[str, Any]]:
+def load_hotpot_dataset(hotpot_path: str, max_samples: int = 10000) -> List[Dict[str, Any]]:
     """Load HotpotQA dataset from *hotpot_path*; fall back to synthetic data."""
     if hotpot_path and os.path.exists(hotpot_path):
         import importlib.util
