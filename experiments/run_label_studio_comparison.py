@@ -380,8 +380,8 @@ def run_experiment(
         if not _routed_cache:
             al_filter = ActiveLearningFilter(
                 method="alps",
-                budget=len(dataset),
-                batch_size=max(2, len(dataset) // 10),
+                budget=1000,
+                batch_size=max(2, 1000 // 10),
                 force_fallback=force_fallback,
             )
             filtered = al_filter.filter(dataset)
