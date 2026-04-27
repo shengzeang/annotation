@@ -43,7 +43,7 @@ Usage
 
     # Real Qwen routing (requires GPU)
     python experiments/run_llm_routing.py \\
-        --samples 500 \\
+        --samples 10000 \\
         --cheap-model   Qwen/Qwen2.5-7B-Instruct \\
         --expensive-model Qwen/Qwen2.5-72B-Instruct \\
         --judge-model   Qwen/Qwen2.5-7B-Instruct \\
@@ -617,7 +617,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="LLM Routing experiment: cost-quality tradeoff in QA annotation"
     )
-    parser.add_argument("--samples", type=int, default=200)
+    parser.add_argument("--samples", type=int, default=10000)
     parser.add_argument("--hotpot-path", default="hotpot_train_v1.json",
                         help="HotpotQA training JSON path (default: hotpot_train_v1.json)")
     parser.add_argument("--squad-path", default=None,

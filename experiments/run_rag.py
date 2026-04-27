@@ -26,7 +26,7 @@ Usage
 
     # Real Qwen annotation (requires GPU)
     python experiments/run_rag.py \\
-        --samples 500 \\
+        --samples 10000 \\
         --model Qwen/Qwen2.5-7B-Instruct \\
         --hotpot-path path/to/hotpot_train_v1.1.json \\
         --output-dir /tmp/rag_out
@@ -473,7 +473,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="RAG-augmented annotation experiment for QA"
     )
-    parser.add_argument("--samples", type=int, default=200)
+    parser.add_argument("--samples", type=int, default=10000)
     parser.add_argument("--hotpot-path", default="hotpot_train_v1.json",
                         help="HotpotQA training JSON path (default: hotpot_train_v1.json)")
     parser.add_argument("--squad-path", default=None,

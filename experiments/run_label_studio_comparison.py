@@ -25,7 +25,7 @@ Usage
 
     # Real Qwen annotation (requires GPU)
     python experiments/run_label_studio_comparison.py \\
-        --samples 500 \\
+        --samples 10000 \\
         --models Qwen/Qwen2.5-3B-Instruct Qwen/Qwen2.5-7B-Instruct Qwen/Qwen2.5-14B-Instruct \\
         --hotpot-path path/to/hotpot_train_v1.1.json \\
         --output-dir /tmp/lsc_out
@@ -571,7 +571,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         )
     )
     parser.add_argument(
-        "--samples", type=int, default=200,
+        "--samples", type=int, default=10000,
         help="Number of QA samples (default: 200)",
     )
     parser.add_argument(

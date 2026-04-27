@@ -31,7 +31,7 @@ Usage
 
     # Real Qwen annotation (requires GPU + HuggingFace model access)
     python experiments/run_active_learning.py \\
-        --samples 500 --budget 100 \\
+        --samples 10000 --budget 1000 \\
         --cheap-model  Qwen/Qwen2.5-7B-Instruct \\
         --judge-model  Qwen/Qwen2.5-7B-Instruct \\
         --hotpot-path path/to/hotpot_train_v1.1.json \\
@@ -457,8 +457,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="Active Learning filter comparison for QA annotation"
     )
-    parser.add_argument("--samples", type=int, default=200)
-    parser.add_argument("--budget", type=int, default=50)
+    parser.add_argument("--samples", type=int, default=10000)
+    parser.add_argument("--budget", type=int, default=1000)
     parser.add_argument("--hotpot-path", default="hotpot_train_v1.json",
                         help="HotpotQA training JSON path (default: hotpot_train_v1.json)")
     parser.add_argument("--squad-path", default=None,
