@@ -84,7 +84,7 @@ from tasks.qa import QATask
 DEFAULT_CANDIDATE_LLMS: List[str] = [
     "Qwen/Qwen2.5-3B-Instruct",
     "Qwen/Qwen2.5-7B-Instruct",
-    "Qwen/Qwen2.5-14B-Instruct",
+    "Qwen/Qwen2.5-32B-Instruct",
 ]
 
 

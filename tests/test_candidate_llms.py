@@ -626,7 +626,7 @@ class TestDefaultCandidateLLMs(unittest.TestCase):
             [
                 "Qwen/Qwen2.5-3B-Instruct",
                 "Qwen/Qwen2.5-7B-Instruct",
-                "Qwen/Qwen2.5-14B-Instruct",
+                "Qwen/Qwen2.5-32B-Instruct",
             ],
         )
 
@@ -643,7 +643,7 @@ class TestDefaultCandidateLLMs(unittest.TestCase):
             [
                 "Qwen/Qwen2.5-3B-Instruct",
                 "Qwen/Qwen2.5-7B-Instruct",
-                "Qwen/Qwen2.5-14B-Instruct",
+                "Qwen/Qwen2.5-32B-Instruct",
             ],
         )
 

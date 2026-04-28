@@ -26,7 +26,7 @@ Usage
     # Real Qwen annotation (requires GPU)
     python experiments/run_label_studio_comparison.py \\
         --samples 10000 \\
-        --models Qwen/Qwen2.5-3B-Instruct Qwen/Qwen2.5-7B-Instruct Qwen/Qwen2.5-14B-Instruct \\
+        --models Qwen/Qwen2.5-3B-Instruct Qwen/Qwen2.5-7B-Instruct Qwen/Qwen2.5-32B-Instruct \\
         --hotpot-path path/to/hotpot_train_v1.1.json \\
         --output-dir /tmp/lsc_out
 """
@@ -61,7 +61,7 @@ from tasks.qa import QATask
 DEFAULT_CANDIDATE_LLMS: List[str] = [
     "Qwen/Qwen2.5-3B-Instruct",
     "Qwen/Qwen2.5-7B-Instruct",
-    "Qwen/Qwen2.5-14B-Instruct",
+    "Qwen/Qwen2.5-32B-Instruct",
 ]
 
 

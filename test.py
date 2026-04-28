@@ -14,7 +14,7 @@ from scripts.select_best_route import select_best
 DEFAULT_CANDIDATE_LLMS = [
     "Qwen/Qwen2.5-3B-Instruct",
     "Qwen/Qwen2.5-7B-Instruct",
-    "Qwen/Qwen2.5-14B-Instruct",
+    "Qwen/Qwen2.5-32B-Instruct",
 ]
 
 # ==============================
