@@ -16,7 +16,7 @@ Two conditions are compared, varying only the ``Annotator`` RAG configuration:
                   grows progressively: high-confidence answers are added after
                   each batch so later samples benefit from richer context.
 
-Both conditions use the same ``ActiveLearningFilter`` + ``CascadeRouter``.
+Both conditions use the same ``ActiveLearningFilter`` + ``KNNRouter``.
 Per-window token-F1 shows the improvement over time as the KB fills.
 
 Usage
@@ -54,7 +54,7 @@ if _ROOT not in sys.path:
 # ---------------------------------------------------------------------------
 from annotation import Annotator
 from filters import ActiveLearningFilter
-from routers import CascadeRouter
+from routers import KNNRouter
 from tasks.qa import QATask
 
 # Default candidate LLMs — shared with test.py / HumanLLMAnnotationSystem.
@@ -84,6 +84,24 @@ class MockJudgeLLM:
 
     def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
         return "1"
+
+
+class MockKNNRouter:
+    """Offline-safe KNNRouter stub for ``force_fallback`` / ``--skip-llm`` mode.
+
+    Routes all samples to the first (cheapest) candidate with uniform scores,
+    without loading any sentence-transformer model.
+    """
+
+    def __init__(self, candidate_llms: List[str]):
+        self.candidate_llms = list(candidate_llms)
+
+    def route(self, dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        n = len(self.candidate_llms)
+        uniform = 1.0 / n if n else 0.0
+        scores = [{"model": c, "score": uniform} for c in self.candidate_llms]
+        chosen = self.candidate_llms[0] if self.candidate_llms else None
+        return [{**d, "route": chosen, "route_scores": scores} for d in dataset]
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +301,7 @@ def run_experiment(
 ) -> List[Dict[str, Any]]:
     """Run RAG vs No-RAG annotation comparison.
 
-    Both conditions use the same ``ActiveLearningFilter`` + ``CascadeRouter``
+    Both conditions use the same ``ActiveLearningFilter`` + ``KNNRouter``
     pipeline — only the ``Annotator`` RAG flag differs.  This directly shows
     the impact of knowledge-base retrieval on annotation quality.
 
@@ -294,7 +312,7 @@ def run_experiment(
     llm:
         LLM instance used for annotation.
     judge_llm:
-        LLM used as judge by ``CascadeRouter``.
+        Unused; retained for backward compatibility.
     output_dir:
         Directory for SFT JSONL outputs and KB files.
     topk:
@@ -347,11 +365,12 @@ def run_experiment(
         )
         filtered = al_filter.filter(dataset)
 
-        router = CascadeRouter(
-            judge_llm=judge_llm,
-            candidate_llm=candidate_llms,
-            llm_dict=llm_dict,
-        )
+        if force_fallback:
+            router: Any = MockKNNRouter(candidate_llms)
+        else:
+            _knn_kb_path = os.path.join(output_dir, "kb_knn_bootstrap.json")
+            _bootstrap_annotator = Annotator(candidate_llms, llm_dict, task=task, kb_path=_knn_kb_path)
+            router = KNNRouter(annotator=_bootstrap_annotator, candidate_llms=candidate_llms)
         routed = router.route(filtered)
     else:
         routed = []  # unused — all conditions will be loaded from cache
@@ -426,7 +445,7 @@ def print_results_table(results: List[Dict[str, Any]], window: int = 50) -> None
     sep = "-" * len(header)
     print("\n" + sep)
     print("  RAG — Retrieval-Augmented QA Annotation Comparison")
-    print("  (both conditions use the same filter + CascadeRouter + Annotator)")
+    print("  (both conditions use the same filter + KNNRouter + Annotator)")
     print(sep)
     print(header)
     print(sep)
@@ -485,7 +504,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="Candidate LLMs to annotate with (default: the 3 standard Qwen models)",
     )
     parser.add_argument("--judge-model", default=None,
-                        help="Judge LLM for CascadeRouter (defaults to last --models entry)")
+                        help="Judge LLM (unused with KNNRouter; retained for compatibility)")
     parser.add_argument("--topk", type=int, default=3)
     parser.add_argument("--window", type=int, default=50)
     parser.add_argument("--skip-llm", action="store_true")
