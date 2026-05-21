@@ -1,6 +1,6 @@
-# DataFlow-Annotator — Unified Data Filtering, Routing, and Annotation Framework
+# CELDA — An Adaptive Streaming Framework for Cost-Efficient LLM-Based Data Annotation
 
-DataFlow-Annotator enables seamless integration of automated data governance and human intervention. In this unified workflow, data progresses through filtering, routing, and annotation stages within the same pipeline, eliminating the need to switch between different systems. Specifically, DataFlow-Annotator provides three key operators: Filter, Router, and Annotator.
+CELDA enables seamless integration of automated data governance and human intervention. In this unified workflow, data progresses through filtering, routing, and annotation stages within the same pipeline, eliminating the need to switch between different systems. Specifically, CELDA provides three key operators: Filter, Router, and Annotator.
 
 - **Filter Operators**: Streamline data filtering through multiple consecutive Filter operators to extract the most valuable samples for the current task, leveraging strategies like active learning or data quality evaluation.
 - **Router Operators**: Dynamically allocate samples to the most suitable model within a user-defined set of candidate LLMs using algorithms such as MLP, KNN, Graph, or LLM-based routing, enhancing annotation efficiency and consistency.
@@ -59,7 +59,7 @@ Open [http://127.0.0.1:5000](http://127.0.0.1:5000) to interact with the provide
 
 ### 6. Explore the Frontend Interface
 
-The frontend of DataFlow-Annotator is built using **React-Flow** for the user interface and **Python Flask** for the backend. It provides an intuitive way to create and manage annotation pipelines. Follow these steps to get started:
+The frontend of CELDA is built using **React-Flow** for the user interface and **Python Flask** for the backend. It provides an intuitive way to create and manage annotation pipelines. Follow these steps to get started:
 
 1. **Pipeline Editor**: Drag and drop nodes (e.g., Filter, Router, Annotator) to build pipelines and visualize the data flow.
 2. **Node Editor**: Click on a node to edit its parameters directly in the interface.
@@ -83,9 +83,9 @@ The frontend of DataFlow-Annotator is built using **React-Flow** for the user in
 
 ## 🧪 Experiments
 
-### Oracle vs DataFlow-Annotator — QA Annotation Comparison (Qwen LLMs)
+### Oracle vs CELDA — QA Annotation Comparison (Qwen LLMs)
 
-`experiments/run_label_studio_comparison.py` benchmarks DataFlow-Annotator
+`experiments/run_label_studio_comparison.py` benchmarks CELDA
 against oracle LLM annotation using **Qwen fine-tuning as the downstream
 evaluation task**.  All annotation is performed by real Qwen models (via
 `misc/llm_provider.LocalLLM` or compatible API).  Downstream fine-tuning
@@ -98,9 +98,9 @@ delegates to `misc/evaluate.py`'s `finetune_sft()` and `evaluate()`
 |---|---|
 | Single Oracle | One call to a large Qwen model (e.g. Qwen2.5-72B) per sample |
 | 3-Oracle Majority Vote | Three independent Qwen calls; majority vote decides the annotation |
-| DataFlow (naive LLM) | Qwen-7B annotation without KB/RAG |
-| DataFlow (KB + RAG) | Qwen-7B with in-context KB retrieval augmentation |
-| DataFlow (full pipeline) | Qwen-7B with KB + RAG + stricter confidence threshold |
+| CELDA (naive LLM) | Qwen-7B annotation without KB/RAG |
+| CELDA (KB + RAG) | Qwen-7B with in-context KB retrieval augmentation |
+| CELDA (full pipeline) | Qwen-7B with KB + RAG + stricter confidence threshold |
 
 **Metrics:** `Ann-F1` / `Ann-EM`, `DS-BLEU` / `DS-ROUGE-L` (GPU required).
 
