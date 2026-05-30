@@ -204,6 +204,33 @@ python experiments/run_rag.py \
 - **Human Review Queue**: Pipelines may write `human_review_queue.json` to the repo root. Use the `HumanReviewQueue` helper to export to a custom file.
 - **RAG Usage**: Construct `Annotator(..., rag=True, rag_method='bm25')` or `'tfidf'` to enable retrieval-augmented prompts.
 
+### KB Experiment CLI (exact commands)
+
+From the repository root:
+
+```bash
+# 1) Run the 500-sample experiment only (no finetuning)
+python experiments/run_kb_experiment.py \
+  --output-dir /tmp/kb_exp_run \
+  --sample-count 500 \
+  --squad-cache-path /tmp/squad_train.json
+
+# 2) Run experiment + generate SFT files for Qwen3-0.6B and Llama3.2-1B
+python experiments/run_kb_experiment.py \
+  --output-dir /tmp/kb_exp_run \
+  --sample-count 500 \
+  --squad-cache-path /tmp/squad_train.json \
+  --run-finetune
+
+# 3) Run experiment + execute finetuning jobs (resource-intensive)
+python experiments/run_kb_experiment.py \
+  --output-dir /tmp/kb_exp_run \
+  --sample-count 500 \
+  --squad-cache-path /tmp/squad_train.json \
+  --run-finetune \
+  --execute-finetune
+```
+
 ---
 
 ## 👩‍💻 Developer Notes
