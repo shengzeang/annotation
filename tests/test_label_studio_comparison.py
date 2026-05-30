@@ -130,7 +130,7 @@ class TestDefaultCandidateLLMs(unittest.TestCase):
     def test_expected_values(self):
         self.assertIn("Qwen/Qwen2.5-3B-Instruct", DEFAULT_CANDIDATE_LLMS)
         self.assertIn("Qwen/Qwen2.5-7B-Instruct", DEFAULT_CANDIDATE_LLMS)
-        self.assertIn("Qwen/Qwen2.5-14B-Instruct", DEFAULT_CANDIDATE_LLMS)
+        self.assertIn("Qwen/Qwen2.5-32B-Instruct", DEFAULT_CANDIDATE_LLMS)
 
 
 # ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ Four filter conditions are compared:
                            the two-stage filter used in
                            ``HumanLLMAnnotationSystem``.
 
-All four conditions share the same ``CascadeRouter`` and ``Annotator``.
+All four conditions share the same ``KNNRouter`` and ``Annotator``.
 
 Metrics show annotation quality (token-F1 / exact-match vs. ground truth)
 and pipeline throughput.
@@ -31,10 +31,10 @@ Usage
 
     # Real Qwen annotation (requires GPU + HuggingFace model access)
     python experiments/run_active_learning.py \\
-        --samples 500 --budget 100 \\
+        --samples 10000 --budget 1000 \\
         --cheap-model  Qwen/Qwen2.5-7B-Instruct \\
         --judge-model  Qwen/Qwen2.5-7B-Instruct \\
-        --squad-path path/to/train-v1.1.json \\
+        --hotpot-path path/to/hotpot_train_v1.1.json \\
         --output-dir /tmp/al_out
 """
 
@@ -61,7 +61,7 @@ if _ROOT not in sys.path:
 # ---------------------------------------------------------------------------
 from annotation import Annotator
 from filters import ActiveLearningFilter, LLMNaiveFilter
-from routers import CascadeRouter
+from routers import KNNRouter
 from tasks.qa import QATask
 from utils import export_annotation_results
 
@@ -69,7 +69,7 @@ from utils import export_annotation_results
 DEFAULT_CANDIDATE_LLMS: List[str] = [
     "Qwen/Qwen2.5-3B-Instruct",
     "Qwen/Qwen2.5-7B-Instruct",
-    "Qwen/Qwen2.5-14B-Instruct",
+    "Qwen/Qwen2.5-32B-Instruct",
 ]
 
 
@@ -100,6 +100,24 @@ class MockJudgeLLM:
 
     def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
         return "1"
+
+
+class MockKNNRouter:
+    """Offline-safe KNNRouter stub for ``force_fallback`` / ``--skip-llm`` mode.
+
+    Routes all samples to the first (cheapest) candidate with uniform scores,
+    without loading any sentence-transformer model.
+    """
+
+    def __init__(self, candidate_llms: List[str]):
+        self.candidate_llms = list(candidate_llms)
+
+    def route(self, dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        n = len(self.candidate_llms)
+        uniform = 1.0 / n if n else 0.0
+        scores = [{"model": c, "score": uniform} for c in self.candidate_llms]
+        chosen = self.candidate_llms[0] if self.candidate_llms else None
+        return [{**d, "route": chosen, "route_scores": scores} for d in dataset]
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +178,7 @@ def write_sft_jsonl(annotated: List[Dict[str, Any]], path: str) -> int:
 # Dataset helpers
 # ---------------------------------------------------------------------------
 
-def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]]:
+def _make_synthetic_dataset(n: int = 10000, seed: int = 42) -> List[Dict[str, Any]]:
     rng = random.Random(seed)
     topics = [
         ("Albert Einstein", "Einstein developed the theory of relativity.", "relativity"),
@@ -188,7 +206,7 @@ def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]
     return dataset
 
 
-def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str, Any]]:
+def load_squad_dataset(squad_path: str, max_samples: int = 10000) -> List[Dict[str, Any]]:
     if squad_path and os.path.exists(squad_path):
         import importlib.util
         spec = importlib.util.spec_from_file_location(
@@ -198,6 +216,21 @@ def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         ds = mod.SquadDataset.from_file(squad_path, max_samples=max_samples)
+        return list(ds._data)
+    return _make_synthetic_dataset(n=max_samples)
+
+
+def load_hotpot_dataset(hotpot_path: str, max_samples: int = 10000) -> List[Dict[str, Any]]:
+    """Load HotpotQA dataset from *hotpot_path*; fall back to synthetic data."""
+    if hotpot_path and os.path.exists(hotpot_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "qa_datasets",
+            os.path.join(_ROOT, "qa_data", "qa_datasets.py"),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        ds = mod.HotpotDataset.from_file(hotpot_path, max_samples=max_samples)
         return list(ds._data)
     return _make_synthetic_dataset(n=max_samples)
 
@@ -255,7 +288,7 @@ def run_experiment(
     dataset: List[Dict[str, Any]],
     cheap_llm: Any,
     judge_llm: Any,
-    budget: int = 50,
+    budget: int = 1000,
     output_dir: str = "/tmp/al_out",
     seed: int = 42,
     force_fallback: bool = True,
@@ -265,7 +298,7 @@ def run_experiment(
 ) -> List[Dict[str, Any]]:
     """Run four filter conditions following the HumanLLMAnnotationSystem pattern.
 
-    Each condition uses the SAME ``CascadeRouter`` + ``Annotator`` pipeline;
+    Each condition uses the SAME ``KNNRouter`` + ``Annotator`` pipeline;
     only the first-stage filter changes.
 
     Parameters
@@ -275,7 +308,7 @@ def run_experiment(
     cheap_llm:
         Primary annotation LLM (and LLMNaiveFilter scorer).
     judge_llm:
-        LLM used by ``CascadeRouter`` to judge cheap-LLM answers.
+        Unused; retained for backward compatibility.
     budget:
         Annotation budget per AL condition (samples selected).
     output_dir:
@@ -379,11 +412,10 @@ def run_experiment(
             task=task,
             kb_path=kb_path,
         )
-        router = CascadeRouter(
-            judge_llm=judge_llm,
-            candidate_llm=candidate_llms,
-            llm_dict=llm_dict,
-        )
+        if force_fallback:
+            router: Any = MockKNNRouter(candidate_llms)
+        else:
+            router = KNNRouter(annotator=annotator, candidate_llms=candidate_llms)
 
         # filter → route → annotate  (HumanLLMAnnotationSystem pattern)
         routed = router.route(selected)
@@ -419,7 +451,7 @@ def print_results_table(results: List[Dict[str, Any]]) -> None:
     sep = "-" * len(header)
     print("\n" + sep)
     print("  Active Learning — Filter Strategy Comparison")
-    print("  (all conditions use the same CascadeRouter + Annotator)")
+    print("  (all conditions use the same KNNRouter + Annotator)")
     print(sep)
     print(header)
     print(sep)
@@ -442,9 +474,12 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="Active Learning filter comparison for QA annotation"
     )
-    parser.add_argument("--samples", type=int, default=200)
-    parser.add_argument("--budget", type=int, default=50)
-    parser.add_argument("--squad-path", default="squad_train.json")
+    parser.add_argument("--samples", type=int, default=10000)
+    parser.add_argument("--budget", type=int, default=1000)
+    parser.add_argument("--hotpot-path", default="hotpot_train_v1.json",
+                        help="HotpotQA training JSON path (default: hotpot_train_v1.json)")
+    parser.add_argument("--squad-path", default=None,
+                        help="SQuAD training JSON path; used only when --hotpot-path is absent")
     parser.add_argument(
         "--models",
         nargs="+",
@@ -452,7 +487,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="Candidate LLMs to annotate with (default: the 3 standard Qwen models)",
     )
     parser.add_argument("--judge-model", default=None,
-                        help="Judge LLM for CascadeRouter (defaults to last --models entry)")
+                        help="Judge LLM (unused with KNNRouter; retained for compatibility)")
     parser.add_argument("--skip-llm", action="store_true",
                         help="Use mock LLMs and force_fallback for offline testing")
     parser.add_argument("--output-dir", default="/tmp/al_out")
@@ -460,7 +495,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = parser.parse_args(argv)
 
     print(f"Loading dataset (max {args.samples} samples)…")
-    dataset = load_squad_dataset(args.squad_path, max_samples=args.samples)
+    if args.hotpot_path and os.path.exists(args.hotpot_path):
+        dataset = load_hotpot_dataset(args.hotpot_path, max_samples=args.samples)
+    else:
+        dataset = load_squad_dataset(args.squad_path or "", max_samples=args.samples)
     print(f"Loaded {len(dataset)} samples.  Budget = {args.budget}.")
 
     if args.skip_llm:

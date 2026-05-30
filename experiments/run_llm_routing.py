@@ -43,11 +43,11 @@ Usage
 
     # Real Qwen routing (requires GPU)
     python experiments/run_llm_routing.py \\
-        --samples 500 \\
+        --samples 10000 \\
         --cheap-model   Qwen/Qwen2.5-7B-Instruct \\
         --expensive-model Qwen/Qwen2.5-72B-Instruct \\
         --judge-model   Qwen/Qwen2.5-7B-Instruct \\
-        --squad-path path/to/train-v1.1.json \\
+        --hotpot-path path/to/hotpot_train_v1.1.json \\
         --output-dir /tmp/routing_out
 """
 
@@ -84,7 +84,7 @@ from tasks.qa import QATask
 DEFAULT_CANDIDATE_LLMS: List[str] = [
     "Qwen/Qwen2.5-3B-Instruct",
     "Qwen/Qwen2.5-7B-Instruct",
-    "Qwen/Qwen2.5-14B-Instruct",
+    "Qwen/Qwen2.5-32B-Instruct",
 ]
 
 
@@ -327,7 +327,7 @@ def write_sft_jsonl(annotated: List[Dict[str, Any]], path: str) -> int:
 # Dataset helpers
 # ---------------------------------------------------------------------------
 
-def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]]:
+def _make_synthetic_dataset(n: int = 10000, seed: int = 42) -> List[Dict[str, Any]]:
     rng = random.Random(seed)
     topics = [
         ("Albert Einstein", "Einstein developed the theory of relativity.", "relativity"),
@@ -350,7 +350,7 @@ def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]
     return dataset
 
 
-def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str, Any]]:
+def load_squad_dataset(squad_path: str, max_samples: int = 10000) -> List[Dict[str, Any]]:
     if squad_path and os.path.exists(squad_path):
         import importlib.util
         spec = importlib.util.spec_from_file_location(
@@ -360,6 +360,21 @@ def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         ds = mod.SquadDataset.from_file(squad_path, max_samples=max_samples)
+        return list(ds._data)
+    return _make_synthetic_dataset(n=max_samples)
+
+
+def load_hotpot_dataset(hotpot_path: str, max_samples: int = 10000) -> List[Dict[str, Any]]:
+    """Load HotpotQA dataset from *hotpot_path*; fall back to synthetic data."""
+    if hotpot_path and os.path.exists(hotpot_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "qa_datasets",
+            os.path.join(_ROOT, "qa_data", "qa_datasets.py"),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        ds = mod.HotpotDataset.from_file(hotpot_path, max_samples=max_samples)
         return list(ds._data)
     return _make_synthetic_dataset(n=max_samples)
 
@@ -440,8 +455,8 @@ def run_experiment(
     # Shared filter (same for all conditions, as in HumanLLMAnnotationSystem)
     al_filter = ActiveLearningFilter(
         method="alps",
-        budget=len(dataset),
-        batch_size=max(2, len(dataset) // 10),
+        budget=1000,
+        batch_size=max(2, 1000 // 10),
         force_fallback=force_fallback,
     )
     filtered = al_filter.filter(dataset)
@@ -602,8 +617,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="LLM Routing experiment: cost-quality tradeoff in QA annotation"
     )
-    parser.add_argument("--samples", type=int, default=200)
-    parser.add_argument("--squad-path", default="squad_train.json")
+    parser.add_argument("--samples", type=int, default=10000)
+    parser.add_argument("--hotpot-path", default="hotpot_train_v1.json",
+                        help="HotpotQA training JSON path (default: hotpot_train_v1.json)")
+    parser.add_argument("--squad-path", default=None,
+                        help="SQuAD training JSON path; used only when --hotpot-path is absent")
     parser.add_argument(
         "--models",
         nargs="+",
@@ -624,7 +642,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = parser.parse_args(argv)
 
     print(f"Loading dataset (max {args.samples} samples)…")
-    dataset = load_squad_dataset(args.squad_path, max_samples=args.samples)
+    if args.hotpot_path and os.path.exists(args.hotpot_path):
+        dataset = load_hotpot_dataset(args.hotpot_path, max_samples=args.samples)
+    else:
+        dataset = load_squad_dataset(args.squad_path or "", max_samples=args.samples)
     print(f"Loaded {len(dataset)} samples.")
 
     if args.skip_llm:

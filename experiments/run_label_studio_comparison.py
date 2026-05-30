@@ -11,7 +11,7 @@ Five conditions are compared:
                                 (no filter/router; models[-1] is used).
 2. **3-Oracle Majority Vote** – three independent oracle annotations resolved
                                 by majority vote.
-3. **DataFlow (naive LLM)**   – ``ActiveLearningFilter`` + ``CascadeRouter`` +
+3. **DataFlow (naive LLM)**   – ``ActiveLearningFilter`` + ``KNNRouter`` +
                                 ``Annotator(rag=False)``.
 4. **DataFlow (KB + RAG)**    – same pipeline with ``Annotator(rag=True)``.
 5. **DataFlow (full)**        – same as (4) but with a stricter confidence
@@ -25,9 +25,9 @@ Usage
 
     # Real Qwen annotation (requires GPU)
     python experiments/run_label_studio_comparison.py \\
-        --samples 500 \\
-        --models Qwen/Qwen2.5-3B-Instruct Qwen/Qwen2.5-7B-Instruct Qwen/Qwen2.5-14B-Instruct \\
-        --squad-path path/to/train-v1.1.json \\
+        --samples 10000 \\
+        --models Qwen/Qwen2.5-3B-Instruct Qwen/Qwen2.5-7B-Instruct Qwen/Qwen2.5-32B-Instruct \\
+        --hotpot-path path/to/hotpot_train_v1.1.json \\
         --output-dir /tmp/lsc_out
 """
 
@@ -54,14 +54,14 @@ if _ROOT not in sys.path:
 # ---------------------------------------------------------------------------
 from annotation import Annotator
 from filters import ActiveLearningFilter
-from routers import CascadeRouter
+from routers import KNNRouter
 from tasks.qa import QATask
 
 # Default candidate LLMs — shared with test.py / HumanLLMAnnotationSystem.
 DEFAULT_CANDIDATE_LLMS: List[str] = [
     "Qwen/Qwen2.5-3B-Instruct",
     "Qwen/Qwen2.5-7B-Instruct",
-    "Qwen/Qwen2.5-14B-Instruct",
+    "Qwen/Qwen2.5-32B-Instruct",
 ]
 
 
@@ -84,6 +84,24 @@ class MockJudgeLLM:
 
     def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
         return "1"
+
+
+class MockKNNRouter:
+    """Offline-safe KNNRouter stub for ``force_fallback`` / ``--skip-llm`` mode.
+
+    Routes all samples to the first (cheapest) candidate with uniform scores,
+    without loading any sentence-transformer model.
+    """
+
+    def __init__(self, candidate_llms: List[str]):
+        self.candidate_llms = list(candidate_llms)
+
+    def route(self, dataset: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        n = len(self.candidate_llms)
+        uniform = 1.0 / n if n else 0.0
+        scores = [{"model": c, "score": uniform} for c in self.candidate_llms]
+        chosen = self.candidate_llms[0] if self.candidate_llms else None
+        return [{**d, "route": chosen, "route_scores": scores} for d in dataset]
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +163,7 @@ def write_sft_jsonl(annotated: List[Dict[str, Any]], path: str) -> int:
 # Dataset helpers
 # ---------------------------------------------------------------------------
 
-def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]]:
+def _make_synthetic_dataset(n: int = 10000, seed: int = 42) -> List[Dict[str, Any]]:
     """Generate a synthetic SQuAD-style dataset for offline testing."""
     rng = random.Random(seed)
     topics = [
@@ -174,7 +192,7 @@ def _make_synthetic_dataset(n: int = 200, seed: int = 42) -> List[Dict[str, Any]
     return dataset
 
 
-def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str, Any]]:
+def load_squad_dataset(squad_path: str, max_samples: int = 10000) -> List[Dict[str, Any]]:
     """Load SQuAD dataset from *squad_path*; fall back to synthetic data."""
     if squad_path and os.path.exists(squad_path):
         import importlib.util
@@ -185,6 +203,21 @@ def load_squad_dataset(squad_path: str, max_samples: int = 200) -> List[Dict[str
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         ds = mod.SquadDataset.from_file(squad_path, max_samples=max_samples)
+        return list(ds._data)
+    return _make_synthetic_dataset(n=max_samples)
+
+
+def load_hotpot_dataset(hotpot_path: str, max_samples: int = 10000) -> List[Dict[str, Any]]:
+    """Load HotpotQA dataset from *hotpot_path*; fall back to synthetic data."""
+    if hotpot_path and os.path.exists(hotpot_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "qa_datasets",
+            os.path.join(_ROOT, "qa_data", "qa_datasets.py"),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        ds = mod.HotpotDataset.from_file(hotpot_path, max_samples=max_samples)
         return list(ds._data)
     return _make_synthetic_dataset(n=max_samples)
 
@@ -299,7 +332,7 @@ def run_experiment(
                                     ``candidate_llms``); bypasses filter/router.
     2. **3-Oracle Majority Vote** – same as (1) but run 3 times; per-sample
                                     majority vote decides the final annotation.
-    3. **DataFlow (naive LLM)**   – ``ActiveLearningFilter`` + ``CascadeRouter``
+    3. **DataFlow (naive LLM)**   – ``ActiveLearningFilter`` + ``KNNRouter``
                                     + ``Annotator(rag=False)``.
     4. **DataFlow (KB + RAG)**    – same pipeline with ``Annotator(rag=True)``.
     5. **DataFlow (full)**        – same as (4) with ``confidence_threshold=0.75``.
@@ -312,7 +345,7 @@ def run_experiment(
         LLM instance used by the oracle conditions when no ``llm_dict`` is
         supplied (mock / single-model mode).
     judge_llm:
-        LLM used as judge by ``CascadeRouter``.
+        Unused; retained for backward compatibility.
     output_dir:
         Directory for SFT JSONL output and (optionally) fine-tuned models.
     skip_finetune:
@@ -365,16 +398,17 @@ def run_experiment(
         if not _routed_cache:
             al_filter = ActiveLearningFilter(
                 method="alps",
-                budget=len(dataset),
-                batch_size=max(2, len(dataset) // 10),
+                budget=1000,
+                batch_size=max(2, 1000 // 10),
                 force_fallback=force_fallback,
             )
             filtered = al_filter.filter(dataset)
-            router = CascadeRouter(
-                judge_llm=judge_llm,
-                candidate_llm=candidate_llms,
-                llm_dict=llm_dict,
-            )
+            if force_fallback:
+                router: Any = MockKNNRouter(candidate_llms)
+            else:
+                _knn_kb_path = os.path.join(output_dir, "kb_knn_bootstrap.json")
+                _bootstrap_annotator = Annotator(candidate_llms, llm_dict, task=task, kb_path=_knn_kb_path)
+                router = KNNRouter(annotator=_bootstrap_annotator, candidate_llms=candidate_llms)
             _routed_cache.append(router.route(filtered))
         return _routed_cache[0]
 
@@ -516,7 +550,7 @@ def print_results_table(results: List[Dict[str, Any]]) -> None:
     sep = "-" * len(header)
     print("\n" + sep)
     print("  DataFlow-Annotator vs Oracle — QA Annotation Comparison (Qwen)")
-    print("  (conditions 3-5 use ActiveLearningFilter + CascadeRouter + Annotator)")
+    print("  (conditions 3-5 use ActiveLearningFilter + KNNRouter + Annotator)")
     if not has_downstream:
         print("  (downstream metrics skipped; re-run without --skip-finetune for Qwen SFT eval)")
     print(sep)
@@ -556,12 +590,16 @@ def main(argv: Optional[List[str]] = None) -> None:
         )
     )
     parser.add_argument(
-        "--samples", type=int, default=200,
+        "--samples", type=int, default=10000,
         help="Number of QA samples (default: 200)",
     )
     parser.add_argument(
-        "--squad-path", default="squad_train.json",
-        help="SQuAD training JSON path; falls back to synthetic data if absent",
+        "--hotpot-path", default="hotpot_train_v1.json",
+        help="HotpotQA training JSON path (default: hotpot_train_v1.json)",
+    )
+    parser.add_argument(
+        "--squad-path", default=None,
+        help="SQuAD training JSON path; used only when --hotpot-path is absent",
     )
     parser.add_argument(
         "--models",
@@ -571,7 +609,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
     parser.add_argument(
         "--judge-model", default=None,
-        help="Judge LLM for CascadeRouter (defaults to last --models entry)",
+        help="Judge LLM (unused with KNNRouter; retained for compatibility)",
     )
     parser.add_argument(
         "--finetune-model", default="Qwen/Qwen2.5-7B-Instruct",
@@ -600,7 +638,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = parser.parse_args(argv)
 
     print(f"Loading dataset (max {args.samples} samples)…")
-    dataset = load_squad_dataset(args.squad_path, max_samples=args.samples)
+    if args.hotpot_path and os.path.exists(args.hotpot_path):
+        dataset = load_hotpot_dataset(args.hotpot_path, max_samples=args.samples)
+    else:
+        dataset = load_squad_dataset(args.squad_path or "", max_samples=args.samples)
     print(f"Loaded {len(dataset)} samples.")
 
     if args.skip_llm:
